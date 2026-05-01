@@ -12,6 +12,10 @@ public class Row extends LinkedHashMap<String, Object> {
         super();
     }
 
+    public Row(int initialCapacity) {
+        super(initialCapacity);
+    }
+
     public Row(Map<String, Object> map) {
         super(map);
     }

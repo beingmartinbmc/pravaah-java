@@ -12,6 +12,23 @@ JDK11="/Users/sharma.ankit2/Library/Java/JavaVirtualMachines/jbr_dcevm-11.0.16/C
 JDK17="$(/usr/libexec/java_home -v 17)/bin/java"
 JDK25="/Users/sharma.ankit2/Downloads/sfdc-jdk-zulu-25.0.1.0.101_17-macos_aarch64/bin/java"
 
+if ! ls "$PROJECT_DIR"/benchmark-libs/*.jar >/dev/null 2>&1; then
+    echo "Missing benchmark-libs/*.jar. Download competitor JARs first (see README)."
+    exit 1
+fi
+
+echo "Compiling Pravaah and benchmark runner..."
+mkdir -p "$PROJECT_DIR/target/classes" "$PROJECT_DIR/target/test-classes"
+JAVAC8="${JDK8%/bin/java}/bin/javac"
+"$JDK8" -version >/dev/null 2>&1
+(cd "$PROJECT_DIR" && "$JAVAC8" -source 1.8 -target 1.8 \
+    -d "$PROJECT_DIR/target/classes" \
+    $(rg --files src/main/java | tr '\n' ' '))
+"$JAVAC8" -source 1.8 -target 1.8 \
+    -cp "$PROJECT_DIR/target/classes:$PROJECT_DIR/benchmark-libs/*" \
+    -d "$PROJECT_DIR/target/test-classes" \
+    "$PROJECT_DIR/src/test/java/io/github/beingmartinbmc/pravaah/BenchmarkRunner.java"
+
 declare -a JDKS=("JDK8:$JDK8" "JDK11:$JDK11" "JDK17:$JDK17" "JDK25:$JDK25")
 
 for entry in "${JDKS[@]}"; do
