@@ -1,11 +1,11 @@
 package io.github.beingmartinbmc.pravaah.runtime;
 
-import java.io.BufferedReader;
+import io.github.beingmartinbmc.pravaah.internal.io.InputScanner;
+import io.github.beingmartinbmc.pravaah.internal.io.Java8Utf8Reader;
+import io.github.beingmartinbmc.pravaah.internal.io.Utf8Reader;
+
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Java 8 baseline runtime support.
@@ -15,24 +15,23 @@ import java.nio.charset.StandardCharsets;
  */
 public final class RuntimeSupport {
 
+    private static final Java8Utf8Reader UTF8_READER = new Java8Utf8Reader();
+
     private RuntimeSupport() {}
 
     public static String implementation() {
         return "java8";
     }
 
+    public static Utf8Reader utf8Reader() {
+        return UTF8_READER;
+    }
+
+    public static InputScanner inputScanner() {
+        return UTF8_READER;
+    }
+
     public static String readUtf8(InputStream stream, int initialCapacity) throws IOException {
-        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        try {
-            StringBuilder sb = new StringBuilder(Math.max(16, initialCapacity));
-            char[] buffer = new char[8192];
-            int read;
-            while ((read = reader.read(buffer)) != -1) {
-                sb.append(buffer, 0, read);
-            }
-            return sb.toString();
-        } finally {
-            reader.close();
-        }
+        return UTF8_READER.readUtf8(stream, initialCapacity);
     }
 }
