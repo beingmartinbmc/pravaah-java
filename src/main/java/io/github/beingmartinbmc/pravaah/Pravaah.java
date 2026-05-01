@@ -10,6 +10,7 @@ import io.github.beingmartinbmc.pravaah.query.QueryEngine;
 import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
 import io.github.beingmartinbmc.pravaah.internal.validation.SchemaValidationRunner;
 import io.github.beingmartinbmc.pravaah.schema.*;
+import io.github.beingmartinbmc.pravaah.xls.XlsReader;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxReader;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxWriter;
 
@@ -40,6 +41,8 @@ public final class Pravaah {
         switch (format) {
             case CSV:
                 return new PravaahPipeline(() -> CsvReader.readAll(filePath, options));
+            case XLS:
+                return new PravaahPipeline(() -> XlsReader.readAll(filePath, options));
             case XLSX:
                 return new PravaahPipeline(() -> XlsxReader.readAll(filePath, options));
             case JSON:
@@ -55,6 +58,8 @@ public final class Pravaah {
         switch (format) {
             case CSV:
                 return new PravaahPipeline(() -> CsvReader.readAll(data, options));
+            case XLS:
+                return new PravaahPipeline(() -> XlsReader.readAll(data, options));
             case XLSX:
                 return new PravaahPipeline(() -> XlsxReader.readAll(data, options));
             case JSON:

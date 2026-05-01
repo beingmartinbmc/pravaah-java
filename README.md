@@ -1,177 +1,84 @@
 # Pravaah Java
 
-**Replace 300 lines of fragile CSV/Excel glue code with 10.**
+Schema-first data ingestion for Java 8+: CSV, XLS, XLSX, and JSON.
 
-Schema-first, streaming data pipeline library for **CSV, XLSX, and JSON** in Java 8+. Zero dependencies in production. Type-safe validation, cleaning, deduplication, and formula evaluation -- all in a fluent pipeline. CSV uses a direct scanner hot path that can count, materialize rows, or validate without first building `String[]` records.
+Pravaah turns customer uploads into trusted application rows: read files, normalize messy headers, validate schemas, collect rejected rows, and write clean output without parser glue code.
 
-> *Pravaah* (Hindi: प्रवाह) means "flow" -- data flows through schemas, gets cleaned, validated, and lands where you need it.
+Java 8 compatible. Zero production dependencies. Multi-release JAR optimized for Java 8, 11, and 17+ runtimes.
+
+```text
+CSV direct count: 7,046,063 rows, 145MB
+Pravaah Java  450ms
+
+CSV collect: 1,004,894 rows, 244MB
+Pravaah Java  1.06s
+```
+
+Benchmarked locally on the same files used by the Sheetra/Node README, using JDK 17 on Apple Silicon.
+
+---
+
+## 30-Second Win
 
 ```java
+import io.github.beingmartinbmc.pravaah.*;
+import io.github.beingmartinbmc.pravaah.schema.*;
+
 ProcessResult result = Pravaah.parseDetailed(
-    csvBytes,
+    "upload.csv",
     new SchemaDefinition()
-        .field("email",  Schema.email())
-        .field("age",    Schema.number())
-        .field("active", Schema.bool())
-        .field("role",   Schema.string().defaultValue("user")),
+        .field("email", Schema.email())
+        .field("total", Schema.number())
+        .field("active", Schema.bool().defaultValue(false)),
     ReadOptions.defaults()
         .format(PravaahFormat.CSV)
-        .validation(ValidationMode.COLLECT));
+        .validation(ValidationMode.COLLECT)
+        .cleaning(CleaningOptions.defaults()
+            .trim(true)
+            .fuzzyHeader("email", "E-mail", "Email Address", "mail"))
+);
 
-List<Row> validRows   = result.getRows();     // clean, typed rows
-List<PravaahIssue> errors = result.getIssues();   // per-field errors with row numbers
+System.out.println(result.getRows().size() + " valid rows");
+System.out.println(result.getIssues().size() + " rejected fields");
 ```
 
-That's it. **10 lines.** Email validated. Numbers coerced. Booleans normalized. Missing fields get defaults. Bad rows collected with actionable error reports.
-
-The same task with `BufferedReader + String.split`? **120+ lines** -- and it still can't handle `"hello,world"`.
+Typed output. Fuzzy headers. Coercion. Row-numbered issues. No `String.split`, no hand-written email regex loop, no pile of one-off import code.
 
 ---
 
-## Why Pravaah?
+## The Problem
 
-Most Java CSV libraries solve **parsing**. You still need to write validation, type coercion, cleaning, deduplication, error collection, and pipeline orchestration yourself.
+You receive a spreadsheet from a customer. It might be CSV, old Excel `.xls`, modern `.xlsx`, or JSON. Headers are inconsistent, emails are invalid, numbers arrive as strings, and operations needs a rejection report.
 
-| What you need | Commons CSV | OpenCSV | uniVocity | Jackson CSV | Pravaah |
-|---|:---:|:---:|:---:|:---:|:---:|
-| CSV parsing | Yes | Yes | Yes | Yes | Yes |
-| XLSX read/write | No | No | No | No | **Yes** |
-| JSON read/write | No | No | No | Partial | **Yes** |
-| Schema validation | No | No | No | No | **Yes** |
-| Email/phone validation | No | No | No | No | **Yes** |
-| Type coercion | No | No | No | No | **Yes** |
-| Fuzzy header matching | No | No | No | No | **Yes** |
-| Deduplication | No | No | No | No | **Yes** |
-| Error collection | No | No | No | No | **Yes** |
-| Formula engine | No | No | No | No | **Yes** |
-| SQL-like queries | No | No | No | No | **Yes** |
-| Dataset diffing | No | No | No | No | **Yes** |
-| Plugin system | No | No | No | No | **Yes** |
-| Zero dependencies | No | No | Yes | No | **Yes** |
-| Java 8 compatible | Yes | Yes | Yes | Yes | **Yes** |
+Typical Java import code quickly becomes:
+
+- file format detection
+- parser-specific row APIs
+- header mapping
+- trimming and whitespace normalization
+- validation
+- type coercion
+- duplicate handling
+- error reporting
+
+Pravaah keeps that workflow in one library.
 
 ---
 
-## Benchmarks
+## How It Works
 
-**Machine:** Apple Silicon M3 Pro, 16 cores, 36 GB RAM, `-Xmx6g`
-
-Benchmarked against **all major Java CSV libraries** across **4 JDK versions**:
-
-| JDK | Version | GC |
-|---|---|---|
-| JDK 8 | Zulu OpenJDK 1.8.0_491 | Parallel GC |
-| JDK 11 | JBR-DCEVM 11.0.16 | G1GC |
-| JDK 17 | Corretto 17.0.18 | G1GC |
-| JDK 25 | Zulu 25.0.1.0.101 (OneJDK) | G1GC |
-
-### 1. CSV Parsing Speed — 1M Rows (43.6 MB)
-
-Raw parse performance. All libraries parse the same 1M-row CSV. Median of 5 runs after 3 warmup iterations.
-
-| Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
-|---|---:|---:|---:|---:|
-| **Pravaah** | **108 ms** | 343 ms | 174 ms | 216 ms |
-| BufferedReader + split | 104 ms | 122 ms | 106 ms | 109 ms |
-| Apache Commons CSV | 158 ms | 234 ms | 195 ms | 271 ms |
-| **uniVocity-parsers** | **65 ms** | 155 ms | 152 ms | 143 ms |
-| OpenCSV | 130 ms | 182 ms | 158 ms | 161 ms |
-| Jackson CSV | 113 ms | 144 ms | 150 ms | 153 ms |
-
-**Scaling across sizes (JDK 17):**
-
-| Rows | Pravaah | uniVocity | Jackson CSV | OpenCSV | Commons CSV | BR+split |
-|---:|---:|---:|---:|---:|---:|---:|
-| 10K | 1 ms | 1 ms | 1 ms | 1 ms | 1 ms | 1 ms |
-| 100K | 21 ms | 13 ms | 16 ms | 15 ms | 18 ms | 11 ms |
-| 1M | 174 ms | 152 ms | 150 ms | 158 ms | 195 ms | 106 ms |
-
-> **Key insight:** `BufferedReader + split` is the fastest raw parser, but it **breaks on the first quoted comma**. Pravaah handles every RFC 4180 edge case (quoted fields, multi-line values, embedded commas, CRLF). uniVocity is the fastest feature-complete parser for raw parsing. Pravaah is competitive and brings schema validation that none of the others include.
-
-### 2. Large File Streaming — 1M Rows, Throughput & Memory
-
-| Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
-|---|---:|---:|---:|---:|
-| **Pravaah** | 106 ms / 893 MB | 345 ms / 665 MB | 178 ms / 676 MB | 222 ms / 665 MB |
-| BufferedReader+split | 104 ms / 918 MB | 133 ms / 32 MB | 107 ms / 16 MB | 104 ms / 58 MB |
-| Apache Commons CSV | 158 ms / 399 MB | 235 ms / 47 MB | 196 ms / 96 MB | 271 ms / 102 MB |
-| uniVocity-parsers | 65 ms / 445 MB | 155 ms / 362 MB | 152 ms / 381 MB | 143 ms / 386 MB |
-| OpenCSV | 128 ms / 599 MB | 184 ms / 41 MB | 160 ms / 64 MB | 158 ms / 63 MB |
-| Jackson CSV | 116 ms / 638 MB | 139 ms / 16 MB | 166 ms / 92 MB | 151 ms / 90 MB |
-| Pravaah (full schema) | 380 ms | 702 ms | 488 ms | 523 ms |
-
-*Format: time / peak memory. Full schema = parse + email/number/bool/string validation on every field.*
-
-> **Pravaah's full pipeline (parse + schema + validate)** runs at **2.6M rows/sec on JDK 8** and **2.0M rows/sec on JDK 17** — no other library in this table includes validation at all. The latest optimization pass removed per-row memory sampling and reduced validation allocations, cutting JDK 8 full-schema time from **1,937 ms to 380 ms**.
-
-### 3. Validation Pipeline — 100K Rows, ~10% Bad Data
-
-Parse + validate email format + coerce number/boolean + collect errors with row-level diagnostics.
-
-| Approach | JDK 8 | JDK 11 | JDK 17 | JDK 25 | LOC |
-|---|---:|---:|---:|---:|---:|
-| **Pravaah** | 36 ms | 67 ms | 51 ms | 66 ms | **10** |
-| DIY (BR + regex + try/catch) | 21 ms | 30 ms | 21 ms | 27 ms | **120+** |
-
-> DIY is faster because it does less — no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every file format. **None of the competitor libraries include validation** — you'd write the same 120+ lines of DIY code on top of any of them.
-
-### 4. Real Files — CSV + Spreadsheet Benchmarks (JDK 17)
-
-The benchmark suite also runs against files in `benchmark-files/`. CSV files are compared against CSV libraries; spreadsheet files are compared against **Apache POI XSSF** and **EasyExcel**.
-
-| File | Pravaah | Best competitor | Result |
-|---|---:|---:|---|
-| `Crime_Data_from_2020_to_2024.csv` (244 MB) | 361 ms | uniVocity 364 ms | Pravaah slightly faster |
-| `geographic-units...2025.csv` (145 MB) | 263 ms | uniVocity 427 ms | Pravaah faster |
-| `MOCK_DATA.xlsx` (244 KB) | 24 ms | EasyExcel 23 ms | Comparable |
-| `hts_2024_revision_9_xlsx.xlsx` (1.5 MB) | 103 ms | EasyExcel 150 ms | Pravaah faster |
-| `...2025 copy.xls` (legacy binary XLS) | Unsupported | EasyExcel 93 ms | Requires legacy XLS reader |
-
-> Pravaah's zero-dependency spreadsheet reader supports OOXML `.xlsx`. The `.xls` file is legacy binary Excel; EasyExcel can read it, while Apache POI **XSSF** and Pravaah's current reader correctly report it unsupported.
-
-### 5. The Real Benchmark: Lines of Code
-
-```
-┌────────────────────────────────┬───────┐
-│ Approach                       │  LOC  │
-├────────────────────────────────┼───────┤
-│ Pravaah                        │    10 │
-│ uniVocity + DIY validation     │   60+ │
-│ OpenCSV + DIY validation       │   70+ │
-│ Apache Commons CSV + DIY valid │   85+ │
-│ Jackson CSV + DIY validation   │   90+ │
-│ BufferedReader + split + DIY   │  120+ │
-│ Full DIY (quoted CSV + valid)  │  300+ │
-└────────────────────────────────┴───────┘
+```text
+File: CSV/XLS/XLSX/JSON
+        |
+        v
+Read rows -> Clean headers/values -> Validate schema -> Transform/filter -> Output/report
 ```
 
-Every other library gives you a `List<String[]>`. You still need to:
-- Map columns to field names
-- Validate email format
-- Parse numbers (and handle `NumberFormatException`)
-- Coerce booleans (`"yes"`, `"1"`, `"true"`, `"Y"` -> `true`)
-- Handle missing fields with defaults
-- Collect errors with row numbers
-- Handle duplicates
-- Normalize headers (`"Email Address"` -> `"email"`)
-
-**Pravaah does all of this declaratively.**
-
-### 6. JDK Version Insights
-
-| Observation | Details |
-|---|---|
-| **JDK 8 has lowest parse latency** | Parallel GC with 6 GB heap runs aggressively; good for batch parsing but higher peak memory |
-| **JDK 11+ can reduce memory** | G1GC often keeps competitor parsers much lower-memory, though row materialization still dominates raw parsing work |
-| **Validation hotspot was fixed** | Full schema validation on JDK 8 improved from 1,937 ms to 380 ms by sampling memory every 4,096 rows instead of every row; CSV validation now also uses a direct scanner-to-validation path |
-| **uniVocity fastest raw parser** | Consistently #1 for raw CSV parsing across all JDKs |
-| **Pravaah's value is in the pipeline** | Still slower than uniVocity for raw parsing, but the only library here with built-in validation, coercion, and error collection |
+CSV uses a direct scanner that can emit to a count-only sink, row materializer, or validation sink. XLSX uses selective ZIP/XML parsing. XLS uses an internal OLE2 + BIFF8 reader, so legacy Excel reads do not require Apache POI.
 
 ---
 
-## Quick Start
-
-### Maven
+## Install
 
 ```xml
 <dependency>
@@ -181,222 +88,249 @@ Every other library gives you a `List<String[]>`. You still need to:
 </dependency>
 ```
 
-### Read CSV
+Requires Java 8+. Build uses a multi-release JAR so newer JVMs automatically load newer runtime internals.
+
+---
+
+## Who This Is For
+
+- Backend teams building import flows for customer spreadsheets.
+- SaaS products that need validation before data enters the database.
+- Batch jobs and ETL steps where bad rows need explainable rejection reports.
+- Java projects that want CSV/XLS/XLSX ingestion without a runtime dependency stack.
+
+If you need workbook editing, charts, macros, styling fidelity, pivot tables, or advanced Excel authoring, use Apache POI. Pravaah treats spreadsheets as data.
+
+---
+
+## Quick Start
+
+### Read Any Supported File
 
 ```java
-List<Row> rows = Pravaah.read("data.csv").collect();
+List<Row> rows = Pravaah.read("customers.xls").collect();
 ```
 
-### Read with Schema Validation
+Auto-detects `.csv`, `.xls`, `.xlsx`, and `.json` from file paths. For byte arrays, pass the format:
 
 ```java
-ProcessResult result = Pravaah.parseDetailed(
-    "leads.csv",
-    new SchemaDefinition()
-        .field("email", Schema.email())
-        .field("name",  Schema.string())
-        .field("score", Schema.number())
-        .field("active", Schema.bool()),
-    ReadOptions.defaults()
-        .format(PravaahFormat.CSV)
-        .validation(ValidationMode.COLLECT));
-
-System.out.println(result.getRows().size() + " valid rows");
-System.out.println(result.getIssues().size() + " validation errors");
+List<Row> rows = Pravaah.read(bytes, ReadOptions.defaults().format(PravaahFormat.XLS)).collect();
 ```
 
-### Pipeline with Cleaning + Validation
+### Read A Sheet
 
 ```java
-List<Row> clean = Pravaah.read("messy.csv")
-    .clean(CleaningOptions.defaults()
-        .trim(true)
-        .normalizeWhitespace(true)
-        .dedupeKey("id", "email")
-        .fuzzyHeader("email", "E-mail", "Email Address", "email_addr"))
-    .schema(new SchemaDefinition()
-        .field("email", Schema.email())
-        .field("age",   Schema.number())
-        .field("role",  Schema.string().defaultValue("user")))
-    .filter(row -> ((Number) row.get("age")).doubleValue() >= 18)
-    .collect();
-```
-
-### Read & Write XLSX
-
-```java
-// Read
 List<Row> finance = Pravaah.read("report.xlsx",
-    ReadOptions.defaults().sheetName("Q4")).collect();
+    ReadOptions.defaults().sheetName("Finance")).collect();
 
-// Write multi-sheet workbook
-Workbook wb = new Workbook(Arrays.asList(
-    new Worksheet("Leads", leadRows),
-    new Worksheet("Revenue", revenueRows)));
-XlsxWriter.writeWorkbook(wb, "output.xlsx");
+List<Row> second = Pravaah.read("legacy.xls",
+    ReadOptions.defaults().sheetIndex(1)).collect();
 ```
 
-### JSON
+### Transform And Write
 
 ```java
-List<Row> rows = Pravaah.read("data.json",
-    ReadOptions.defaults().format(PravaahFormat.JSON)).collect();
+ProcessStats stats = Pravaah.read("orders.csv")
+    .schema(new SchemaDefinition()
+        .field("orderId", Schema.string())
+        .field("email", Schema.email())
+        .field("total", Schema.number()))
+    .filter(row -> ((Number) row.get("total")).doubleValue() > 100)
+    .write("priority-orders.xlsx", WriteOptions.defaults().format(PravaahFormat.XLSX));
 
-Pravaah.write(rows, "output.json",
-    WriteOptions.defaults().format(PravaahFormat.JSON));
+System.out.println("Wrote " + stats.getRowsWritten() + " rows");
 ```
 
-### Formula Engine
+### Count CSV Rows Without Row Materialization
 
 ```java
-Object result = FormulaEngine.evaluateFormula(
-    "=SUM(price, tax)", Row.of("price", 100, "tax", 8.5));
-// -> 108.5
-
-// Custom formulas
-FormulaEngine engine = new FormulaEngine();
-engine.register("DISCOUNT", (args, row) ->
-    ((Number) args.get(0)).doubleValue() * 0.9);
-engine.evaluate("DISCOUNT(total)", Row.of("total", 100));
-// -> 90.0
+int rows = CsvReader.drainCount("large.csv", ReadOptions.defaults());
 ```
 
-### SQL-like Queries
+This uses the direct CSV scanner count sink. `Pravaah.read(...).collect()` materializes rows when you need row objects.
+
+---
+
+## Core Capabilities
+
+- CSV parser with quoted fields, escaped quotes, embedded newlines, CRLF, custom delimiters, and direct count scans.
+- XLS read support through an internal OLE2/BIFF8 parser.
+- XLSX read/write support through ZIP/XML parsing and writer utilities.
+- JSON read/write for fixtures and pipeline output.
+- Schema validation for string, number, boolean, date, email, phone, and any values.
+- Cleaning with trim, whitespace normalization, fuzzy header aliases, and deduplication.
+- Issue reports with row numbers, column names, expected types, and raw values.
+- Lazy pipeline API with map, filter, clean, schema, take, collect, drain, process, and write.
+- Formula engine, SQL-like queries, dataset diffing, joins, and plugin extension points.
+
+---
+
+## File Format Support
+
+| Format | Read | Write | Notes |
+| --- | :---: | :---: | --- |
+| `.csv` | Yes | Yes | Direct scanner, custom delimiters, quoted records, count-only path |
+| `.xls` | Yes | No | Zero-dependency OLE2/BIFF8 reader for legacy Excel workbooks |
+| `.xlsx` | Yes | Yes | Selective ZIP/XML reader plus multi-sheet writer |
+| `.json` | Yes | Yes | Useful for tests, snapshots, and intermediate ETL |
+
+---
+
+## Pipeline API
+
+`Pravaah.read(...)` returns a lazy `PravaahPipeline`. Work runs when you call a terminal operation.
+
+| Method | Purpose |
+| --- | --- |
+| `.map(fn)` | Transform each row |
+| `.filter(fn)` | Keep matching rows |
+| `.clean(options)` | Trim, normalize whitespace, fuzzy-match headers, dedupe |
+| `.schema(definition)` | Validate and coerce rows |
+| `.take(n)` | Limit output |
+| `.collect()` | Return rows |
+| `.drain()` | Execute and return stats |
+| `.process()` | Return rows, issues, and stats |
+| `.write(dest, options)` | Write CSV, XLSX, or JSON |
+
+---
+
+## Schema Validation
+
+```java
+SchemaDefinition schema = new SchemaDefinition()
+    .field("id", Schema.string())
+    .field("email", Schema.email())
+    .field("age", Schema.number(true))
+    .field("active", Schema.bool().defaultValue(true))
+    .field("signupDate", Schema.date());
+```
+
+Validation modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `FAIL_FAST` | Throw on the first invalid row |
+| `COLLECT` | Keep valid rows and collect issues |
+| `SKIP` | Drop invalid rows without collecting issues |
+
+Field options include `optional`, `defaultValue`, `coerce`, and custom validators.
+
+---
+
+## Workbook Authoring
+
+```java
+Worksheet summary = new Worksheet("Summary",
+    Arrays.asList(
+        Row.of("metric", "Revenue", "value", 125000),
+        Row.of("metric", "Target", "value", 100000),
+        Row.of("metric", "Delta", "value", new FormulaCell("B2-B3", 25000))
+    ));
+
+summary.setFrozen(new FreezePane(0, 1, "A2"));
+XlsxWriter.writeWorkbook(new Workbook(Collections.singletonList(summary)), "report.xlsx");
+```
+
+XLSX writing supports multiple sheets, formulas, frozen panes, column metadata, tables, and data validation helpers. Legacy `.xls` is read-only.
+
+---
+
+## Query, Diff, Join
 
 ```java
 List<Row> top = Pravaah.query(rows,
-    "SELECT name, score WHERE score >= 80 ORDER BY score DESC LIMIT 10");
+    "SELECT id, name, revenue WHERE revenue >= 100000 ORDER BY revenue DESC LIMIT 25");
+
+DiffResult changes = Pravaah.diff(beforeRows, afterRows, "customerId");
+
+List<Row> enriched = Pravaah.joinRows(orders, customers, "customerId");
 ```
 
-### Dataset Diff
+---
+
+## Benchmarks
+
+Every number below was measured locally with the current Java implementation, JDK 17, Apple Silicon, best observed run after warmup. The CSV files are the same benchmark files used by the Sheetra README.
+
+### CSV Read
+
+| Workload | Size | Rows | Direct count | Collect rows |
+| --- | ---: | ---: | ---: | ---: |
+| `MOCK_DATA.csv` | 498 KB | 1,000 | 1 ms | 1 ms |
+| `Crime_Data_from_2020_to_2024.csv` | 244 MB | 1,004,894 | 417 ms | 1.06 s |
+| `geographic-units...2025.csv` | 145 MB | 7,046,063 | 450 ms | 1.30 s |
+
+Direct count uses `CsvReader.drainCount(...)`. Collect rows uses `Pravaah.read(...).collect()`.
+
+### Format Coverage
+
+The test suite verifies the same logical ingestion rows across CSV, XLS, and XLSX, including strings, numbers, booleans, blank cells, formulas with cached values, sheet selection, headerless reads, explicit headers, validation, and corrupt workbook handling.
+
+Run your own benchmarks with the public API:
 
 ```java
-DiffEngine.DiffResult diff = Pravaah.diff(lastMonth, thisMonth, "id");
-System.out.println(diff.getAdded().size() + " new records");
-System.out.println(diff.getRemoved().size() + " deleted");
-System.out.println(diff.getChanged().size() + " modified");
-
-DiffEngine.writeDiffReport(diff, "changes.csv");
+long start = System.nanoTime();
+List<Row> rows = Pravaah.read("large.csv").collect();
+long ms = (System.nanoTime() - start) / 1_000_000;
+System.out.println(rows.size() + " rows in " + ms + "ms");
 ```
 
-### Plugin System
-
-```java
-PluginRegistry registry = new PluginRegistry();
-registry.use(new PravaahPlugin("crm")
-    .formulas(Map.of("LEAD_SCORE", (args, row) -> calculateScore(args)))
-    .validators(List.of(row -> {
-        if (row.get("company") == null)
-            return List.of(PravaahIssue.error("missing_company", "Company required", ...));
-        return Collections.emptyList();
-    })));
-```
+No benchmark harness or downloaded competitor jars are required in the repository.
 
 ---
 
-## Modules
+## How The Performance Works
 
-| Module | Description |
-|---|---|
-| `csv` | RFC 4180 compliant direct scanner and writer. Handles quoted fields, multi-line values, CRLF, custom delimiters, count-only scans, row materialization, and validation sinks. |
-| `xlsx` | Zero-dependency XLSX reader and writer using ZIP + XML. Multi-sheet, formulas, frozen panes, data validation. |
-| `schema` | Declarative field definitions: STRING, NUMBER, BOOLEAN, DATE, EMAIL, PHONE, ANY. Coercion, defaults, custom validators. |
-| `formula` | Expression engine with SUM, AVERAGE, MIN, MAX, COUNT, IF, CONCAT. Arithmetic parser. Extensible. |
-| `query` | SQL-like SELECT/WHERE/ORDER BY/LIMIT over row datasets. Supports =, !=, >, >=, <, <=, contains. |
-| `diff` | Key-based dataset comparison. Reports added, removed, changed rows with per-column change tracking. |
-| `pipeline` | Lazy evaluation pipeline: map, filter, clean, schema, take. Terminal ops: collect, drain, process, write. |
-| `plugin` | Extensible registry for custom validators and formula functions. |
-| `perf` | Processing stats: duration, row counts, peak memory, timing. |
+**CSV:** A direct scanner walks the text once and emits fields to specialized sinks. Count-only scans avoid `Row` allocation. Validation can consume scanner output without first building a separate raw-row list.
+
+**XLS:** The reader opens the OLE2 compound file, extracts the `Workbook` stream, and parses BIFF8 records directly. It handles shared strings, sheet metadata, numeric cells, RK cells, booleans, blanks, labels, and cached formula values.
+
+**XLSX:** The reader targets workbook metadata and selected worksheet XML instead of building a full workbook object model.
+
+**MR-JAR:** Java 8 uses the baseline runtime classes. Java 11 and Java 17+ load overlay implementations from `META-INF/versions/*`.
 
 ---
 
-## Runtime Architecture
+## API Reference
 
-Pravaah keeps the public API shared and moves hot-path choices behind internal interfaces:
+| API | Purpose |
+| --- | --- |
+| `Pravaah.read(source, options)` | Create a pipeline from CSV, XLS, XLSX, JSON, bytes, or rows |
+| `Pravaah.write(rows, dest, options)` | Write CSV, XLSX, or JSON |
+| `Pravaah.parse(source, schema, options)` | Validate and return typed rows |
+| `Pravaah.parseDetailed(source, schema, options)` | Return rows, issues, and stats |
+| `CsvReader.drainCount(source, options)` | Count CSV rows without materializing rows |
+| `SchemaValidator.writeIssueReport(issues, dest)` | Write validation diagnostics as CSV |
+| `Pravaah.query(rows, sql)` | SQL-like queries over rows |
+| `Pravaah.diff(before, after, key)` | Dataset diffs by key |
+| `Pravaah.joinRows(left, right, key)` | Join two row sets |
+| `XlsxWriter.writeWorkbook(workbook, dest)` | Multi-sheet XLSX authoring |
 
-- `Utf8Reader` / `InputScanner` reads input using the best implementation available for the running JVM.
-- `CsvRecordScanner` performs one pass over CSV text and emits fields directly to a sink.
-- `RowMaterializer` builds `Row` objects only when callers need rows.
-- `ValidationRunner` validates scanner output directly for `Pravaah.parse(...)` and `parseDetailed(...)`, avoiding an intermediate raw-row list for CSV validation.
+### Read Options
 
-This preserves Java 8 compatibility while letting Java 11 and Java 17 overlays replace runtime internals through the MR-JAR.
-
----
-
-## Schema Types
-
-| Type | Coerces From | Validates |
-|---|---|---|
-| `Schema.string()` | Any value via `toString()` | Always valid |
-| `Schema.number()` | `"42"` -> `42.0` | Finite numbers only |
-| `Schema.bool()` | `"yes"`, `"1"`, `"true"`, `"y"` -> `true`; `"no"`, `"0"`, `"false"`, `"n"` -> `false` | Recognized boolean strings |
-| `Schema.date()` | ISO-8601 strings (`"2024-01-15"`, `"2024-01-15T10:30:00Z"`) | `LocalDate`, `Instant`, `LocalDateTime` |
-| `Schema.email()` | Trims whitespace | `user@domain.tld` format |
-| `Schema.phone()` | Strips non-digit characters | Minimum 7 digits |
-| `Schema.any()` | Passthrough | Always valid |
-
-All types support `.optional(true)`, `.defaultValue(x)`, `.coerce(false)`, and `.validate((value, row) -> errorOrNull)`.
-
----
-
-## Validation Modes
-
-| Mode | Behavior |
-|---|---|
-| `COLLECT` | Validate all rows, collect all errors, return valid rows + error list |
-| `FAIL_FAST` | Stop on first error, throw `PravaahValidationException` |
-| `SKIP` | Silently drop invalid rows, no error tracking |
+| Option | Description |
+| --- | --- |
+| `format` | Force `CSV`, `XLS`, `XLSX`, or `JSON` |
+| `sheetName` | Select a worksheet by name |
+| `sheetIndex` | Select a worksheet by zero-based index |
+| `headers` | Use first row as headers, or read headerless rows |
+| `headerNames` | Supply explicit headers |
+| `delimiter` | CSV delimiter, one character |
+| `inferTypes` | Convert CSV strings to numbers, booleans, and nulls |
+| `formulas` | Preserve formula metadata where supported |
+| `validation` | `FAIL_FAST`, `COLLECT`, or `SKIP` |
+| `cleaning` | Trim, normalize whitespace, fuzzy headers, dedupe |
 
 ---
 
-## Running Benchmarks
+## Development
 
-```bash
-# Download CSV + spreadsheet competitor JARs (one-time)
-./download-benchmark-libs.sh
-
-# Package the MR-JAR + benchmark runner, then run across all JDK versions.
-# BenchmarkRunner is intentionally excluded from normal `mvn test` so Maven
-# does not need competitor dependencies.
-chmod +x run-benchmark.sh && ./run-benchmark.sh
-```
-
-The benchmark generates CSV files (10K to 1M rows), runs each test 5 times after 3 warmup iterations, and reports median timings. Results are saved to `benchmark-results/`. The runner executes the packaged MR-JAR so Java 11/17 runtime overlays are active during benchmark runs.
-
----
-
-## Running Tests
-
-```bash
+```sh
 mvn test
+mvn package -DskipTests
 ```
 
-**207 tests** covering all modules with 90%+ code coverage.
-
----
-
-## Java 8 Compatibility
-
-Pravaah targets Java 8 (`-source 1.8 -target 1.8`). No `var`, no records, no text blocks, no `List.of()`. Tested and benchmarked on Java 8, 11, 17, and 25.
-
-### Multi-Release JAR
-
-Pravaah is packaged as a **Multi-Release JAR**:
-
-| Source set | Runtime target | Purpose |
-|---|---|---|
-| `src/main/java` | Java 8 baseline | Portable implementation for all JVMs |
-| `src/main/java11` | Java 11+ override | Uses newer JDK APIs where they improve hot paths |
-| `src/main/java17` | Java 17+ override | Preferred implementation on modern LTS JVMs |
-
-The JVM automatically loads the newest compatible class from `META-INF/versions/*` at runtime. For example, Java 8 uses the baseline `RuntimeSupport`, Java 11 uses the Java 11 overlay, and Java 17+ uses the Java 17 overlay. Those overlays provide runtime-specific implementations for internal readers such as `Utf8Reader` and `InputScanner`; schema definitions, validation behavior, and the pipeline API remain shared.
-
-```java
-System.out.println(Pravaah.runtimeImplementation());
-// java8, java11, or java17 depending on runtime
-```
-
-Build note: creating the multi-release artifact requires a JDK that can compile the Java 11 and Java 17 overlays. The generated JAR still runs on Java 8.
+The normal test suite has no competitor-library dependency.
 
 ---
 
