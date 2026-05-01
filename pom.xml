@@ -35,6 +35,9 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- No external benchmark dependencies needed.
+             Benchmarks compare Pravaah against plain JDK (BufferedReader + split). -->
     </dependencies>
 
     <build>
