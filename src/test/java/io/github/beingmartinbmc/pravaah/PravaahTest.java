@@ -5,7 +5,6 @@ import io.github.beingmartinbmc.pravaah.csv.CsvWriter;
 import io.github.beingmartinbmc.pravaah.diff.DiffEngine;
 import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
-import io.github.beingmartinbmc.pravaah.pipeline.PravaahPipeline;
 import io.github.beingmartinbmc.pravaah.plugin.PluginRegistry;
 import io.github.beingmartinbmc.pravaah.plugin.PravaahPlugin;
 import io.github.beingmartinbmc.pravaah.query.QueryEngine;
@@ -15,7 +14,6 @@ import io.github.beingmartinbmc.pravaah.xlsx.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.Instant;
@@ -343,6 +341,14 @@ class PravaahTest {
         List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
         assertEquals(1, rows.size());
         assertEquals("1", rows.get(0).get("x"));
+    }
+
+    @Test
+    void csvTrailingEmptyFieldWithoutNewline() throws Exception {
+        byte[] csv = "a,b,c\n1,2,".getBytes(StandardCharsets.UTF_8);
+        List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
+        assertEquals(1, rows.size());
+        assertEquals("", rows.get(0).get("c"));
     }
 
     @Test

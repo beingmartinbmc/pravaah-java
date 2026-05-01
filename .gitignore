@@ -38,3 +38,4 @@ build/
 ### Benchmark ###
 benchmark-libs/
 benchmark-files/
+benchmark-results/
