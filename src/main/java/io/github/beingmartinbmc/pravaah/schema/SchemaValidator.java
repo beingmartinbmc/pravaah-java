@@ -81,8 +81,8 @@ public final class SchemaValidator {
     }
 
     public static ValidationResult validateRow(Row row, SchemaDefinition definition, int rowNumber) {
-        List<PravaahIssue> issues = new ArrayList<>();
-        Row parsed = new Row();
+        List<PravaahIssue> issues = null;
+        Row parsed = new Row(mapCapacity(definition.size()));
 
         for (Map.Entry<String, FieldDefinition> entry : definition.entrySet()) {
             String key = entry.getKey();
@@ -95,7 +95,7 @@ public final class SchemaValidator {
                 } else if (field.isOptional()) {
                     parsed.put(key, null);
                 } else {
-                    issues.add(PravaahIssue.error("missing_column", key + " is required",
+                    issues = addIssue(issues, PravaahIssue.error("missing_column", key + " is required",
                             rowNumber, key, raw, field.getKind().name().toLowerCase()));
                 }
                 continue;
@@ -103,7 +103,7 @@ public final class SchemaValidator {
 
             CoerceResult coerced = coerceValue(raw, field);
             if (!coerced.isOk()) {
-                issues.add(PravaahIssue.error("invalid_type", key + " must be " + field.getKind().name().toLowerCase(),
+                issues = addIssue(issues, PravaahIssue.error("invalid_type", key + " must be " + field.getKind().name().toLowerCase(),
                         rowNumber, key, raw, field.getKind().name().toLowerCase()));
                 continue;
             }
@@ -111,7 +111,7 @@ public final class SchemaValidator {
             if (field.getValidate() != null) {
                 String customIssue = field.getValidate().apply(coerced.getValue(), row);
                 if (customIssue != null) {
-                    issues.add(PravaahIssue.error("invalid_value", customIssue,
+                    issues = addIssue(issues, PravaahIssue.error("invalid_value", customIssue,
                             rowNumber, key, raw, field.getKind().name().toLowerCase()));
                     continue;
                 }
@@ -120,12 +120,13 @@ public final class SchemaValidator {
             parsed.put(key, coerced.getValue());
         }
 
-        return new ValidationResult(issues.isEmpty() ? parsed : null, issues);
+        return new ValidationResult(issues == null ? parsed : null,
+                issues == null ? Collections.emptyList() : issues);
     }
 
     public static ProcessResult validateRows(Iterable<Row> rows, SchemaDefinition definition,
                                               ValidationMode mode, CleaningOptions cleaning) {
-        List<Row> output = new ArrayList<>();
+        List<Row> output = new ArrayList<>(collectionSize(rows));
         List<PravaahIssue> issues = new ArrayList<>();
         int rowNumber = 1;
 
@@ -144,6 +145,10 @@ public final class SchemaValidator {
         }
 
         return new ProcessResult(output, issues, null);
+    }
+
+    private static int collectionSize(Iterable<Row> rows) {
+        return rows instanceof Collection ? ((Collection<?>) rows).size() : 16;
     }
 
     public static void writeIssueReport(List<PravaahIssue> issues, String destination) throws IOException {
@@ -229,11 +234,13 @@ public final class SchemaValidator {
             case BOOLEAN: {
                 if (raw instanceof Boolean) return CoerceResult.success(raw);
                 if (!field.isCoerce()) return CoerceResult.failure();
-                String normalized = String.valueOf(raw).trim().toLowerCase();
-                if ("true".equals(normalized) || "1".equals(normalized) || "yes".equals(normalized) || "y".equals(normalized)) {
+                String normalized = String.valueOf(raw).trim();
+                if ("true".equalsIgnoreCase(normalized) || "1".equals(normalized)
+                        || "yes".equalsIgnoreCase(normalized) || "y".equalsIgnoreCase(normalized)) {
                     return CoerceResult.success(true);
                 }
-                if ("false".equals(normalized) || "0".equals(normalized) || "no".equals(normalized) || "n".equals(normalized)) {
+                if ("false".equalsIgnoreCase(normalized) || "0".equals(normalized)
+                        || "no".equalsIgnoreCase(normalized) || "n".equalsIgnoreCase(normalized)) {
                     return CoerceResult.success(false);
                 }
                 return CoerceResult.failure();
@@ -262,6 +269,18 @@ public final class SchemaValidator {
         if (dedupeKey == null) return false;
         String identity = buildIdentity(row, dedupeKey);
         return !seen.add(identity);
+    }
+
+    private static List<PravaahIssue> addIssue(List<PravaahIssue> issues, PravaahIssue issue) {
+        if (issues == null) {
+            issues = new ArrayList<>(1);
+        }
+        issues.add(issue);
+        return issues;
+    }
+
+    private static int mapCapacity(int entries) {
+        return Math.max(4, (int) (entries / 0.75f) + 1);
     }
 
     private static String buildIdentity(Row row, List<String> keys) {

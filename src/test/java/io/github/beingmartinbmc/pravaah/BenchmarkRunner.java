@@ -2,6 +2,7 @@ package io.github.beingmartinbmc.pravaah;
 
 import io.github.beingmartinbmc.pravaah.csv.CsvReader;
 import io.github.beingmartinbmc.pravaah.schema.*;
+import io.github.beingmartinbmc.pravaah.xlsx.XlsxReader;
 
 import com.univocity.parsers.csv.*;
 import org.apache.commons.csv.CSVFormat;
@@ -10,6 +11,13 @@ import org.apache.commons.csv.CSVRecord;
 import com.opencsv.CSVReaderBuilder;
 import com.fasterxml.jackson.dataformat.csv.CsvMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvSchema;
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.event.AnalysisEventListener;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -52,6 +60,8 @@ public final class BenchmarkRunner {
         benchmarkCsvParsing(tmpDir);
         benchmarkValidationPipeline(tmpDir);
         benchmarkLargeFileStreaming(tmpDir);
+        benchmarkExternalCsvFiles(Paths.get("benchmark-files"));
+        benchmarkSpreadsheetFiles(Paths.get("benchmark-files"));
         benchmarkLocComparison();
 
         System.out.println("\n" + ruler);
@@ -169,6 +179,90 @@ public final class BenchmarkRunner {
         while (it.hasNext()) { it.next(); count++; }
         it.close();
         return count;
+    }
+
+    // --- Streaming parsers for real files ---
+
+    private static int parsePravaahFile(Path file) throws IOException {
+        return CsvReader.drainCount(file.toString(), ReadOptions.defaults());
+    }
+
+    private static int parseDiySplitFile(Path file) throws IOException {
+        BufferedReader br = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+        try {
+            String headerLine = br.readLine();
+            if (headerLine == null) return 0;
+            int count = 0;
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.isEmpty()) continue;
+                line.split(",", -1);
+                count++;
+            }
+            return count;
+        } finally {
+            br.close();
+        }
+    }
+
+    private static int parseCommonsCsvFile(Path file) throws IOException {
+        Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+        CSVParser parser = CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(reader);
+        try {
+            int count = 0;
+            for (CSVRecord rec : parser) {
+                rec.get(0);
+                count++;
+            }
+            return count;
+        } finally {
+            parser.close();
+        }
+    }
+
+    private static int parseUnivocityFile(Path file) throws IOException {
+        CsvParserSettings settings = new CsvParserSettings();
+        settings.setHeaderExtractionEnabled(true);
+        settings.setMaxCharsPerColumn(1_048_576);
+        com.univocity.parsers.csv.CsvParser parser =
+                new com.univocity.parsers.csv.CsvParser(settings);
+        Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+        try {
+            parser.beginParsing(reader);
+            int count = 0;
+            while (parser.parseNext() != null) count++;
+            return count;
+        } finally {
+            parser.stopParsing();
+            reader.close();
+        }
+    }
+
+    private static int parseOpenCsvFile(Path file) throws Exception {
+        Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8);
+        com.opencsv.CSVReader csvReader = new CSVReaderBuilder(reader).build();
+        try {
+            csvReader.readNext(); // header
+            int count = 0;
+            while (csvReader.readNext() != null) count++;
+            return count;
+        } finally {
+            csvReader.close();
+        }
+    }
+
+    private static int parseJacksonCsvFile(Path file) throws Exception {
+        CsvMapper mapper = new CsvMapper();
+        CsvSchema schema = CsvSchema.emptySchema().withHeader();
+        com.fasterxml.jackson.databind.MappingIterator<Map<String, String>> it =
+                mapper.readerFor(Map.class).with(schema).readValues(file.toFile());
+        try {
+            int count = 0;
+            while (it.hasNext()) { it.next(); count++; }
+            return count;
+        } finally {
+            it.close();
+        }
     }
 
     // =========================================================================
@@ -332,6 +426,200 @@ public final class BenchmarkRunner {
     }
 
     // =========================================================================
+    // BENCHMARK 4: Real CSV files from benchmark-files/
+    // =========================================================================
+
+    private static void benchmarkExternalCsvFiles(Path dir) throws Exception {
+        if (!Files.isDirectory(dir)) {
+            System.out.println(box("BENCHMARK 4: REAL FILES — benchmark-files/ not found"));
+            System.out.println("  Skipping real-file benchmark.\n");
+            return;
+        }
+
+        List<Path> csvFiles = new ArrayList<>();
+        List<Path> skipped = new ArrayList<>();
+        DirectoryStream<Path> stream = Files.newDirectoryStream(dir);
+        try {
+            for (Path file : stream) {
+                if (!Files.isRegularFile(file)) continue;
+                String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+                if (name.endsWith(".csv")) csvFiles.add(file);
+                else skipped.add(file);
+            }
+        } finally {
+            stream.close();
+        }
+
+        csvFiles.sort(Comparator.comparing(path -> path.getFileName().toString()));
+
+        System.out.println(box("BENCHMARK 4: REAL CSV FILES — streaming row count"));
+        if (csvFiles.isEmpty()) {
+            System.out.println("  No .csv files found.\n");
+            return;
+        }
+
+        String[] names = {"Pravaah", "BufferedReader+split", "Apache Commons CSV",
+                "uniVocity-parsers", "OpenCSV", "Jackson CSV"};
+
+        for (Path file : csvFiles) {
+            long bytes = Files.size(file);
+            System.out.println("--- " + file.getFileName() + " (" + formatBytes(bytes) + ") ---");
+            System.out.printf("  %-32s %8s  %12s  %14s%n", "Library", "Time", "Rows", "Throughput");
+            System.out.println("  " + repeat('-', 74));
+
+            ParseAction[] actions = {
+                    () -> parsePravaahFile(file),
+                    () -> parseDiySplitFile(file),
+                    () -> parseCommonsCsvFile(file),
+                    () -> parseUnivocityFile(file),
+                    () -> parseOpenCsvFile(file),
+                    () -> parseJacksonCsvFile(file)
+            };
+
+            for (int i = 0; i < names.length; i++) {
+                FileBenchResult result = benchFile(actions[i]);
+                if (result.error == null) {
+                    double tput = result.timeMs == 0 ? 0 : (double) result.rows / result.timeMs * 1000.0;
+                    System.out.printf("  %-32s %6d ms  %12d  %10.0f r/s%n",
+                            names[i], result.timeMs, result.rows, tput);
+                } else {
+                    System.out.printf("  %-32s %8s  %12s  %14s%n",
+                            names[i], "FAILED", "-", result.error);
+                }
+            }
+            System.out.println();
+        }
+
+        System.out.println("  Note: BufferedReader+split is not RFC CSV-safe and may miscount quoted multiline rows.\n");
+    }
+
+    // =========================================================================
+    // BENCHMARK 5: Spreadsheet files from benchmark-files/
+    // =========================================================================
+
+    private static void benchmarkSpreadsheetFiles(Path dir) throws Exception {
+        if (!Files.isDirectory(dir)) {
+            System.out.println(box("BENCHMARK 5: SPREADSHEETS — benchmark-files/ not found"));
+            System.out.println("  Skipping spreadsheet benchmark.\n");
+            return;
+        }
+
+        List<Path> files = new ArrayList<>();
+        DirectoryStream<Path> stream = Files.newDirectoryStream(dir);
+        try {
+            for (Path file : stream) {
+                if (!Files.isRegularFile(file)) continue;
+                String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+                if (name.endsWith(".xlsx") || name.endsWith(".xls")) files.add(file);
+            }
+        } finally {
+            stream.close();
+        }
+
+        files.sort(Comparator.comparing(path -> path.getFileName().toString()));
+
+        System.out.println(box("BENCHMARK 5: REAL SPREADSHEETS — first sheet row count"));
+        if (files.isEmpty()) {
+            System.out.println("  No .xlsx or .xls files found.\n");
+            return;
+        }
+
+        String[] names = {"Pravaah XLSX", "Apache POI XSSF", "EasyExcel"};
+
+        for (Path file : files) {
+            long bytes = Files.size(file);
+            System.out.println("--- " + file.getFileName() + " (" + formatBytes(bytes) + ") ---");
+            System.out.printf("  %-32s %8s  %12s  %14s%n", "Library", "Time", "Rows", "Throughput");
+            System.out.println("  " + repeat('-', 74));
+
+            ParseAction[] actions = {
+                    () -> parsePravaahSpreadsheetFile(file),
+                    () -> parsePoiXssfFile(file),
+                    () -> parseEasyExcelFile(file)
+            };
+
+            for (int i = 0; i < names.length; i++) {
+                FileBenchResult result = benchFile(actions[i]);
+                if (result.error == null) {
+                    double tput = result.timeMs == 0 ? 0 : (double) result.rows / result.timeMs * 1000.0;
+                    System.out.printf("  %-32s %6d ms  %12d  %10.0f r/s%n",
+                            names[i], result.timeMs, result.rows, tput);
+                } else {
+                    System.out.printf("  %-32s %8s  %12s  %14s%n",
+                            names[i], "FAILED", "-", result.error);
+                }
+            }
+            System.out.println();
+        }
+
+        System.out.println("  Note: Apache POI XSSF and Pravaah's zero-dependency reader support OOXML .xlsx.");
+        System.out.println("  Legacy binary .xls is reported separately because XSSF is not an .xls reader.\n");
+    }
+
+    private static int parsePravaahSpreadsheetFile(Path file) throws IOException {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".xlsx")) {
+            throw new UnsupportedOperationException("legacy-xls");
+        }
+        return XlsxReader.readAll(file.toString(), ReadOptions.defaults()).size();
+    }
+
+    private static int parsePoiXssfFile(Path file) throws IOException {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".xlsx")) {
+            throw new UnsupportedOperationException("legacy-xls");
+        }
+
+        InputStream input = Files.newInputStream(file);
+        XSSFWorkbook workbook = null;
+        try {
+            workbook = new XSSFWorkbook(input);
+            Sheet sheet = workbook.getNumberOfSheets() == 0 ? null : workbook.getSheetAt(0);
+            if (sheet == null) return 0;
+            DataFormatter formatter = new DataFormatter();
+            int count = 0;
+            boolean header = true;
+            for (org.apache.poi.ss.usermodel.Row row : sheet) {
+                if (header) {
+                    header = false;
+                    continue;
+                }
+                for (Cell cell : row) {
+                    formatter.formatCellValue(cell);
+                }
+                count++;
+            }
+            return count;
+        } finally {
+            if (workbook != null) workbook.close();
+            input.close();
+        }
+    }
+
+    private static int parseEasyExcelFile(Path file) {
+        final int[] rows = {0};
+        EasyExcel.read(file.toFile(), new AnalysisEventListener<Map<Integer, String>>() {
+            @Override
+            public void invoke(Map<Integer, String> row, AnalysisContext context) {
+                rows[0]++;
+                if (row != null) {
+                    for (String value : row.values()) {
+                        if (value != null && value.length() == -1) {
+                            throw new IllegalStateException("unreachable");
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+                // no-op
+            }
+        }).sheet().headRowNumber(1).doRead();
+        return rows[0];
+    }
+
+    // =========================================================================
     // Lines of Code comparison
     // =========================================================================
 
@@ -399,6 +687,18 @@ public final class BenchmarkRunner {
     @FunctionalInterface
     interface ParseAction { int run() throws Exception; }
 
+    private static class FileBenchResult {
+        final long timeMs;
+        final int rows;
+        final String error;
+
+        FileBenchResult(long timeMs, int rows, String error) {
+            this.timeMs = timeMs;
+            this.rows = rows;
+            this.error = error;
+        }
+    }
+
     private static long bench(ParseAction action) throws Exception {
         long[] times = new long[RUNS];
         for (int i = 0; i < RUNS; i++) {
@@ -408,6 +708,22 @@ public final class BenchmarkRunner {
             times[i] = (System.nanoTime() - start) / 1_000_000;
         }
         return median(times);
+    }
+
+    private static FileBenchResult benchFile(ParseAction action) {
+        try {
+            long[] times = new long[RUNS];
+            int rows = 0;
+            for (int i = 0; i < RUNS; i++) {
+                System.gc();
+                long start = System.nanoTime();
+                rows = action.run();
+                times[i] = (System.nanoTime() - start) / 1_000_000;
+            }
+            return new FileBenchResult(median(times), rows, null);
+        } catch (Throwable t) {
+            return new FileBenchResult(0, 0, t.getClass().getSimpleName());
+        }
     }
 
     private static long median(long[] v) {
