@@ -162,17 +162,15 @@ CSV uses a direct scanner that can emit to a count-only sink, row materializer, 
 
 ---
 
-## Install
-
-```xml
-<dependency>
-    <groupId>io.github.beingmartinbmc</groupId>
-    <artifactId>pravaah-java</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
-</dependency>
-```
+## Requirements
 
 Requires Java 8+. Build uses a multi-release JAR so newer JVMs automatically load newer runtime internals.
+
+Until a package is published, build from source:
+
+```bash
+mvn package
+```
 
 ---
 
