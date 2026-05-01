@@ -10,8 +10,6 @@ import io.github.beingmartinbmc.pravaah.query.QueryEngine;
 import io.github.beingmartinbmc.pravaah.schema.*;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxReader;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxWriter;
-import io.github.beingmartinbmc.pravaah.xlsx.Workbook;
-import io.github.beingmartinbmc.pravaah.xlsx.Worksheet;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -115,7 +113,7 @@ public final class Pravaah {
     public static ProcessResult parseDetailed(byte[] data, SchemaDefinition definition, ReadOptions options) throws IOException {
         List<Row> raw = read(data, options).collect();
         ProcessStats stats = PerfUtils.createStats();
-        List<Row> validRows = new ArrayList<>();
+        List<Row> validRows = new ArrayList<>(raw.size());
         List<PravaahIssue> issues = new ArrayList<>();
         int rowNumber = 1;
         Set<String> seen = new HashSet<>();
@@ -131,7 +129,7 @@ public final class Pravaah {
             }
             SchemaValidator.ValidationResult result = SchemaValidator.validateRow(cleaned, definition, rowNumber);
             stats.incrementRowsProcessed();
-            PerfUtils.observeMemory(stats);
+            if ((rowNumber & 4095) == 0) PerfUtils.observeMemory(stats);
 
             if (result.getValue() != null) {
                 validRows.add(result.getValue());
@@ -155,7 +153,7 @@ public final class Pravaah {
 
     private static ProcessResult parseDetailed(List<Row> raw, SchemaDefinition definition, ReadOptions options) {
         ProcessStats stats = PerfUtils.createStats();
-        List<Row> validRows = new ArrayList<>();
+        List<Row> validRows = new ArrayList<>(raw.size());
         List<PravaahIssue> issues = new ArrayList<>();
         int rowNumber = 1;
         Set<String> seen = new HashSet<>();
