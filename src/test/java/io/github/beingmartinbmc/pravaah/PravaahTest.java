@@ -14,6 +14,7 @@ import io.github.beingmartinbmc.pravaah.xlsx.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.Instant;
@@ -194,6 +195,12 @@ class PravaahTest {
     }
 
     @Test
+    void formatFromXlsExtension() {
+        assertEquals(PravaahFormat.XLS, PravaahFormat.fromExtension("data.xls"));
+        assertEquals(PravaahFormat.XLS, PravaahFormat.fromExtension("DATA.XLS"));
+    }
+
+    @Test
     void formatFromNull() {
         assertEquals(PravaahFormat.XLSX, PravaahFormat.fromExtension(null));
     }
@@ -307,6 +314,22 @@ class PravaahTest {
     }
 
     @Test
+    void csvComplexRecordsMaterializeExactlyAndMatchDrainCount() throws Exception {
+        byte[] csv = ("id,note,empty,tail\n"
+                + "1,\"hello, world\",,\"last\"\r\n"
+                + "2,\"escaped \"\"quote\"\"\",\"line\nbreak\",\n"
+                + "3,plain,,").getBytes(StandardCharsets.UTF_8);
+
+        List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
+
+        assertRowsExactly(rows,
+                Row.of("id", "1", "note", "hello, world", "empty", "", "tail", "last"),
+                Row.of("id", "2", "note", "escaped \"quote\"", "empty", "line\nbreak", "tail", ""),
+                Row.of("id", "3", "note", "plain", "empty", "", "tail", ""));
+        assertEquals(rows.size(), CsvReader.drainCount(csv, ReadOptions.defaults()));
+    }
+
+    @Test
     void csvInferTypes() throws Exception {
         byte[] csv = "name,score,active\nAda,10,true\n".getBytes(StandardCharsets.UTF_8);
         List<Row> rows = Pravaah.read(csv, ReadOptions.defaults().format(PravaahFormat.CSV).inferTypes(true)).collect();
@@ -331,24 +354,23 @@ class PravaahTest {
     void csvEmptyFields() throws Exception {
         byte[] csv = "a,b,c\n1,,3\n,2,\n".getBytes(StandardCharsets.UTF_8);
         List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
-        assertEquals(2, rows.size());
-        assertEquals("", rows.get(0).get("b"));
+        assertRowsExactly(rows,
+                Row.of("a", "1", "b", "", "c", "3"),
+                Row.of("a", "", "b", "2", "c", ""));
     }
 
     @Test
     void csvNoTrailingNewline() throws Exception {
         byte[] csv = "x,y\n1,2".getBytes(StandardCharsets.UTF_8);
         List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
-        assertEquals(1, rows.size());
-        assertEquals("1", rows.get(0).get("x"));
+        assertRowsExactly(rows, Row.of("x", "1", "y", "2"));
     }
 
     @Test
     void csvTrailingEmptyFieldWithoutNewline() throws Exception {
         byte[] csv = "a,b,c\n1,2,".getBytes(StandardCharsets.UTF_8);
         List<Row> rows = CsvReader.readAll(csv, ReadOptions.defaults().format(PravaahFormat.CSV));
-        assertEquals(1, rows.size());
-        assertEquals("", rows.get(0).get("c"));
+        assertRowsExactly(rows, Row.of("a", "1", "b", "2", "c", ""));
     }
 
     @Test
@@ -363,8 +385,9 @@ class PravaahTest {
         byte[] csv = "1,Ada\n2,Grace\n".getBytes(StandardCharsets.UTF_8);
         List<Row> rows = CsvReader.readAll(csv,
                 ReadOptions.defaults().format(PravaahFormat.CSV).headers(false).headerNames(Arrays.asList("id", "name")));
-        assertEquals(2, rows.size());
-        assertEquals("1", rows.get(0).get("id"));
+        assertRowsExactly(rows,
+                Row.of("id", "1", "name", "Ada"),
+                Row.of("id", "2", "name", "Grace"));
     }
 
     @Test
@@ -569,6 +592,92 @@ class PravaahTest {
         Pravaah.write(data, file, WriteOptions.defaults().format(PravaahFormat.XLSX));
         List<Row> rows = Pravaah.read(file, ReadOptions.defaults().format(PravaahFormat.XLSX)).collect();
         assertEquals(3, rows.size());
+    }
+
+    // ====================== XLS tests ======================
+
+    @Test
+    void xlsReadsDefaultSheetWithStringsNumbersBooleansBlanksAndFormulaValues() throws Exception {
+        String file = tempDir.resolve("legacy.xls").toString();
+        Files.write(Paths.get(file), sampleXlsWorkbook());
+
+        List<Row> rows = Pravaah.read(file).collect();
+
+        assertRowsExactly(rows,
+                Row.of("email", "ada@example.com", "score", 42, "active", true,
+                        "note", "hello, world", "blank", null, "computed", 84),
+                Row.of("email", "grace@example.com", "score", 7.5, "active", false,
+                        "note", "escaped \"quote\"", "blank", null, "computed", 15));
+    }
+
+    @Test
+    void xlsSupportsSheetNameSheetIndexHeaderlessAndExplicitHeaders() throws Exception {
+        byte[] workbook = sampleXlsWorkbook();
+
+        List<Row> byName = Pravaah.read(workbook,
+                ReadOptions.defaults().format(PravaahFormat.XLS).sheetName("Second")).collect();
+        assertRowsExactly(byName, Row.of("kind", "secondary", "value", 99));
+
+        List<Row> byIndex = Pravaah.read(workbook,
+                ReadOptions.defaults().format(PravaahFormat.XLS).sheetIndex(1)).collect();
+        assertEquals(byName, byIndex);
+
+        List<Row> headerless = Pravaah.read(workbook,
+                ReadOptions.defaults().format(PravaahFormat.XLS).headers(false)).collect();
+        assertRowsExactly(headerless,
+                Row.of("_1", "email", "_2", "score", "_3", "active", "_4", "note", "_5", "blank", "_6", "computed"),
+                Row.of("_1", "ada@example.com", "_2", 42, "_3", true,
+                        "_4", "hello, world", "_5", null, "_6", 84),
+                Row.of("_1", "grace@example.com", "_2", 7.5, "_3", false,
+                        "_4", "escaped \"quote\"", "_5", null, "_6", 15));
+
+        List<Row> explicit = Pravaah.read(workbook,
+                ReadOptions.defaults().format(PravaahFormat.XLS)
+                        .headers(false)
+                        .headerNames(Arrays.asList("col1", "col2"))).collect();
+        assertRowsExactly(explicit,
+                Row.of("col1", "email", "col2", "score"),
+                Row.of("col1", "ada@example.com", "col2", 42),
+                Row.of("col1", "grace@example.com", "col2", 7.5));
+    }
+
+    @Test
+    void xlsValidationAndCorruptWorkbookFailuresAreClear() throws Exception {
+        ProcessResult result = Pravaah.parseDetailed(sampleXlsWorkbook(),
+                SchemaDefinition.of("email", Schema.email(), "score", Schema.number(), "active", Schema.bool()),
+                ReadOptions.defaults().format(PravaahFormat.XLS).validation(ValidationMode.COLLECT));
+
+        assertEquals(2, result.getRows().size());
+        assertTrue(result.getIssues().isEmpty());
+
+        assertThrows(Exception.class, () ->
+                Pravaah.read("not an xls".getBytes(StandardCharsets.UTF_8),
+                        ReadOptions.defaults().format(PravaahFormat.XLS)).collect());
+    }
+
+    @Test
+    void csvXlsAndXlsxReturnEquivalentRowsForIngestionData() throws Exception {
+        List<Row> expected = Arrays.asList(
+                Row.of("email", "ada@example.com", "score", 42, "active", true,
+                        "note", "hello, world", "blank", null, "computed", 84),
+                Row.of("email", "grace@example.com", "score", 7.5, "active", false,
+                        "note", "escaped \"quote\"", "blank", null, "computed", 15)
+        );
+
+        String csvFile = tempDir.resolve("parity.csv").toString();
+        String xlsxFile = tempDir.resolve("parity.xlsx").toString();
+        String xlsFile = tempDir.resolve("parity.xls").toString();
+        Pravaah.write(expected, csvFile, WriteOptions.defaults().format(PravaahFormat.CSV));
+        Pravaah.write(expected, xlsxFile, WriteOptions.defaults().format(PravaahFormat.XLSX));
+        Files.write(Paths.get(xlsFile), sampleXlsWorkbook());
+
+        List<Row> csv = Pravaah.read(csvFile, ReadOptions.defaults().format(PravaahFormat.CSV).inferTypes(true)).collect();
+        List<Row> xlsx = Pravaah.read(xlsxFile, ReadOptions.defaults().format(PravaahFormat.XLSX)).collect();
+        List<Row> xls = Pravaah.read(xlsFile, ReadOptions.defaults().format(PravaahFormat.XLS)).collect();
+
+        assertEquals(expected, csv);
+        assertEquals(expected, xlsx);
+        assertEquals(expected, xls);
     }
 
     // ====================== Schema tests ======================
@@ -2065,5 +2174,313 @@ class PravaahTest {
         assertEquals("email address", SchemaValidator.normalizeHeader("  Email_Address  "));
         assertEquals("first name", SchemaValidator.normalizeHeader("First-Name"));
         assertEquals("id", SchemaValidator.normalizeHeader("  ID  "));
+    }
+
+    private static void assertRowsExactly(List<Row> actual, Row... expected) {
+        assertEquals(Arrays.asList(expected), actual);
+    }
+
+    private static byte[] sampleXlsWorkbook() throws IOException {
+        TestSheet data = new TestSheet("Data", new Object[][] {
+                {"email", "score", "active", "note", "blank", "computed"},
+                {"ada@example.com", 42, true, "hello, world", null, formula(84)},
+                {"grace@example.com", 7.5, false, "escaped \"quote\"", null, formula(15)}
+        });
+        TestSheet second = new TestSheet("Second", new Object[][] {
+                {"kind", "value"},
+                {"secondary", 99}
+        });
+        return createXlsWorkbook(data, second);
+    }
+
+    private static FormulaValue formula(double value) {
+        return new FormulaValue(value);
+    }
+
+    private static byte[] createXlsWorkbook(TestSheet... sheets) throws IOException {
+        List<String> sharedStrings = new ArrayList<>();
+        Map<String, Integer> sharedStringIndexes = new LinkedHashMap<>();
+        for (TestSheet sheet : sheets) {
+            for (Object[] row : sheet.rows) {
+                for (Object value : row) {
+                    if (value instanceof String && !sharedStringIndexes.containsKey(value)) {
+                        sharedStringIndexes.put((String) value, sharedStrings.size());
+                        sharedStrings.add((String) value);
+                    }
+                }
+            }
+        }
+
+        List<byte[]> sheetStreams = new ArrayList<>();
+        for (TestSheet sheet : sheets) {
+            sheetStreams.add(createSheetStream(sheet, sharedStringIndexes));
+        }
+
+        byte[] globalsBof = record(0x0809, bofPayload(0x0005));
+        byte[] sst = createSstRecord(sharedStrings);
+        byte[] globalsEof = record(0x000A, new byte[0]);
+
+        int boundsLength = 0;
+        for (TestSheet sheet : sheets) boundsLength += 4 + boundsheetPayload(0, sheet.name).length;
+        int offset = globalsBof.length + sst.length + boundsLength + globalsEof.length;
+
+        ByteArrayOutputStream workbook = new ByteArrayOutputStream();
+        workbook.write(globalsBof);
+        workbook.write(sst);
+        for (int i = 0; i < sheets.length; i++) {
+            workbook.write(record(0x0085, boundsheetPayload(offset, sheets[i].name)));
+            offset += sheetStreams.get(i).length;
+        }
+        workbook.write(globalsEof);
+        for (byte[] sheetStream : sheetStreams) workbook.write(sheetStream);
+
+        while (workbook.size() < 4096) {
+            workbook.write(0);
+        }
+        return createOleWorkbook(workbook.toByteArray());
+    }
+
+    private static byte[] createSheetStream(TestSheet sheet, Map<String, Integer> sharedStringIndexes) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(record(0x0809, bofPayload(0x0010)));
+        out.write(record(0x0200, dimensionsPayload(sheet.rows.length, maxColumns(sheet.rows))));
+        for (int r = 0; r < sheet.rows.length; r++) {
+            Object[] row = sheet.rows[r];
+            for (int c = 0; c < row.length; c++) {
+                Object value = row[c];
+                if (value == null) {
+                    out.write(record(0x0201, rowColXfPayload(r, c)));
+                } else if (value instanceof String) {
+                    out.write(record(0x00FD, labelSstPayload(r, c, sharedStringIndexes.get(value))));
+                } else if (value instanceof Boolean) {
+                    out.write(record(0x0205, boolPayload(r, c, (Boolean) value)));
+                } else if (value instanceof FormulaValue) {
+                    out.write(record(0x0006, formulaPayload(r, c, ((FormulaValue) value).value)));
+                } else if (value instanceof Number) {
+                    out.write(record(0x0203, numberPayload(r, c, ((Number) value).doubleValue())));
+                }
+            }
+        }
+        out.write(record(0x000A, new byte[0]));
+        return out.toByteArray();
+    }
+
+    private static byte[] createSstRecord(List<String> strings) throws IOException {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        writeInt(payload, strings.size());
+        writeInt(payload, strings.size());
+        for (String value : strings) writeUnicodeString(payload, value);
+        return record(0x00FC, payload.toByteArray());
+    }
+
+    private static byte[] createOleWorkbook(byte[] workbookStream) throws IOException {
+        final int sectorSize = 512;
+        int workbookSectors = (workbookStream.length + sectorSize - 1) / sectorSize;
+        int sectorCount = 2 + workbookSectors;
+        int[] fat = new int[Math.max(128, sectorCount)];
+        Arrays.fill(fat, -1);
+        fat[0] = -3;
+        fat[1] = -2;
+        for (int i = 0; i < workbookSectors; i++) {
+            fat[2 + i] = i == workbookSectors - 1 ? -2 : 3 + i;
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] header = new byte[512];
+        byte[] signature = new byte[] {
+                (byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0,
+                (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1
+        };
+        System.arraycopy(signature, 0, header, 0, signature.length);
+        writeShort(header, 24, 0x003E);
+        writeShort(header, 26, 0x0003);
+        writeShort(header, 28, 0xFFFE);
+        writeShort(header, 30, 9);
+        writeShort(header, 32, 6);
+        writeInt(header, 44, 1);
+        writeInt(header, 48, 1);
+        writeInt(header, 56, 4096);
+        writeInt(header, 60, -2);
+        writeInt(header, 64, 0);
+        writeInt(header, 68, -2);
+        writeInt(header, 72, 0);
+        for (int i = 0; i < 109; i++) writeInt(header, 76 + i * 4, -1);
+        writeInt(header, 76, 0);
+        out.write(header);
+
+        byte[] fatSector = new byte[512];
+        for (int i = 0; i < 128; i++) writeInt(fatSector, i * 4, fat[i]);
+        out.write(fatSector);
+        out.write(directorySector(workbookStream.length));
+
+        byte[] paddedWorkbook = new byte[workbookSectors * sectorSize];
+        System.arraycopy(workbookStream, 0, paddedWorkbook, 0, workbookStream.length);
+        out.write(paddedWorkbook);
+        return out.toByteArray();
+    }
+
+    private static byte[] directorySector(int workbookSize) {
+        byte[] directory = new byte[512];
+        directoryEntry(directory, 0, "Root Entry", 5, -1, 0);
+        directoryEntry(directory, 128, "Workbook", 2, 2, workbookSize);
+        return directory;
+    }
+
+    private static void directoryEntry(byte[] directory, int offset, String name, int type, int startSector, int size) {
+        for (int i = 0; i < name.length(); i++) {
+            writeShort(directory, offset + i * 2, name.charAt(i));
+        }
+        writeShort(directory, offset + name.length() * 2, 0);
+        writeShort(directory, offset + 64, (name.length() + 1) * 2);
+        directory[offset + 66] = (byte) type;
+        directory[offset + 67] = 1;
+        writeInt(directory, offset + 68, -1);
+        writeInt(directory, offset + 72, -1);
+        writeInt(directory, offset + 76, type == 5 ? 1 : -1);
+        writeInt(directory, offset + 116, startSector);
+        writeInt(directory, offset + 120, size);
+        writeInt(directory, offset + 124, 0);
+    }
+
+    private static byte[] bofPayload(int type) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeShort(out, 0x0600);
+        writeShort(out, type);
+        writeShort(out, 0x0DBB);
+        writeShort(out, 0x07CC);
+        writeInt(out, 0x00000041);
+        writeInt(out, 0x00000006);
+        return out.toByteArray();
+    }
+
+    private static byte[] boundsheetPayload(int offset, String name) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, offset);
+        out.write(0);
+        out.write(0);
+        writeByteCountUnicodeString(out, name);
+        return out.toByteArray();
+    }
+
+    private static byte[] dimensionsPayload(int rows, int cols) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeInt(out, 0);
+        writeInt(out, rows);
+        writeShort(out, 0);
+        writeShort(out, cols);
+        writeShort(out, 0);
+        return out.toByteArray();
+    }
+
+    private static byte[] rowColXfPayload(int row, int col) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeShort(out, row);
+        writeShort(out, col);
+        writeShort(out, 0);
+        return out.toByteArray();
+    }
+
+    private static byte[] labelSstPayload(int row, int col, int sstIndex) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(rowColXfPayload(row, col));
+        writeInt(out, sstIndex);
+        return out.toByteArray();
+    }
+
+    private static byte[] boolPayload(int row, int col, boolean value) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(rowColXfPayload(row, col));
+        out.write(value ? 1 : 0);
+        out.write(0);
+        return out.toByteArray();
+    }
+
+    private static byte[] numberPayload(int row, int col, double value) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(rowColXfPayload(row, col));
+        writeLong(out, Double.doubleToLongBits(value));
+        return out.toByteArray();
+    }
+
+    private static byte[] formulaPayload(int row, int col, double cachedValue) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(numberPayload(row, col, cachedValue));
+        writeShort(out, 0);
+        writeInt(out, 0);
+        writeShort(out, 0);
+        return out.toByteArray();
+    }
+
+    private static byte[] record(int sid, byte[] payload) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        writeShort(out, sid);
+        writeShort(out, payload.length);
+        out.write(payload);
+        return out.toByteArray();
+    }
+
+    private static void writeUnicodeString(ByteArrayOutputStream out, String value) throws IOException {
+        writeShort(out, value.length());
+        out.write(0);
+        for (int i = 0; i < value.length(); i++) out.write((byte) value.charAt(i));
+    }
+
+    private static void writeByteCountUnicodeString(ByteArrayOutputStream out, String value) throws IOException {
+        out.write(value.length());
+        out.write(0);
+        for (int i = 0; i < value.length(); i++) out.write((byte) value.charAt(i));
+    }
+
+    private static int maxColumns(Object[][] rows) {
+        int max = 0;
+        for (Object[] row : rows) max = Math.max(max, row.length);
+        return max;
+    }
+
+    private static void writeShort(ByteArrayOutputStream out, int value) throws IOException {
+        out.write(value & 0xFF);
+        out.write((value >>> 8) & 0xFF);
+    }
+
+    private static void writeInt(ByteArrayOutputStream out, int value) throws IOException {
+        out.write(value & 0xFF);
+        out.write((value >>> 8) & 0xFF);
+        out.write((value >>> 16) & 0xFF);
+        out.write((value >>> 24) & 0xFF);
+    }
+
+    private static void writeLong(ByteArrayOutputStream out, long value) throws IOException {
+        writeInt(out, (int) value);
+        writeInt(out, (int) (value >>> 32));
+    }
+
+    private static void writeShort(byte[] bytes, int offset, int value) {
+        bytes[offset] = (byte) value;
+        bytes[offset + 1] = (byte) (value >>> 8);
+    }
+
+    private static void writeInt(byte[] bytes, int offset, int value) {
+        bytes[offset] = (byte) value;
+        bytes[offset + 1] = (byte) (value >>> 8);
+        bytes[offset + 2] = (byte) (value >>> 16);
+        bytes[offset + 3] = (byte) (value >>> 24);
+    }
+
+    private static final class TestSheet {
+        final String name;
+        final Object[][] rows;
+
+        TestSheet(String name, Object[][] rows) {
+            this.name = name;
+            this.rows = rows;
+        }
+    }
+
+    private static final class FormulaValue {
+        final double value;
+
+        FormulaValue(double value) {
+            this.value = value;
+        }
     }
 }
