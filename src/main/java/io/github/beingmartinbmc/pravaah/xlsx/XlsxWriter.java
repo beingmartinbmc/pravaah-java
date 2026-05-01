@@ -26,7 +26,7 @@ public final class XlsxWriter {
         FileOutputStream fos = new FileOutputStream(destination);
         ZipOutputStream zos = new ZipOutputStream(fos);
         try {
-            zos.setLevel(6);
+            zos.setLevel(1);
             writeEntry(zos, "[Content_Types].xml", contentTypesXml(sheets));
             writeEntry(zos, "_rels/.rels", rootRelsXml());
             writeEntry(zos, "docProps/app.xml", appXml(sheets));
@@ -39,17 +39,7 @@ public final class XlsxWriter {
                 Worksheet sheet = sheets.get(i);
                 List<String> headers = options.getHeaders();
                 if (headers == null) headers = inferHeaders(sheet.getRows());
-                List<Object[]> dataRows = new ArrayList<>();
-                String[] headerArr = headers.toArray(new String[0]);
-                dataRows.add(headerArr);
-                for (Row row : sheet.getRows()) {
-                    Object[] rowData = new Object[headerArr.length];
-                    for (int j = 0; j < headerArr.length; j++) {
-                        rowData[j] = row.get(headerArr[j]);
-                    }
-                    dataRows.add(rowData);
-                }
-                writeEntry(zos, "xl/worksheets/sheet" + (i + 1) + ".xml", worksheetXml(dataRows, sheet));
+                writeWorksheetEntry(zos, "xl/worksheets/sheet" + (i + 1) + ".xml", sheet, headers);
             }
         } finally {
             zos.close();
@@ -66,6 +56,15 @@ public final class XlsxWriter {
         writeWorkbook(wb, destination, options);
     }
 
+    private static void writeWorksheetEntry(ZipOutputStream zos, String name, Worksheet sheet,
+                                            List<String> headers) throws IOException {
+        zos.putNextEntry(new ZipEntry(name));
+        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(zos, StandardCharsets.UTF_8), 64 * 1024);
+        writeWorksheetXml(writer, sheet, headers);
+        writer.flush();
+        zos.closeEntry();
+    }
+
     private static void writeEntry(ZipOutputStream zos, String name, String content) throws IOException {
         zos.putNextEntry(new ZipEntry(name));
         zos.write(content.getBytes(StandardCharsets.UTF_8));
@@ -77,84 +76,164 @@ public final class XlsxWriter {
         return new ArrayList<>(rows.get(0).keySet());
     }
 
-    private static String worksheetXml(List<Object[]> rows, Worksheet sheet) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
-        sb.append("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n");
+    private static void writeWorksheetXml(Writer writer, Worksheet sheet, List<String> headers) throws IOException {
+        writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+        writer.write("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n");
 
         if (sheet != null && sheet.getFrozen() != null) {
             FreezePane f = sheet.getFrozen();
-            sb.append("  <sheetViews><sheetView workbookViewId=\"0\"><pane ");
-            if (f.getXSplit() != null) sb.append("xSplit=\"").append(f.getXSplit()).append("\" ");
-            if (f.getYSplit() != null) sb.append("ySplit=\"").append(f.getYSplit()).append("\" ");
-            if (f.getTopLeftCell() != null) sb.append("topLeftCell=\"").append(escapeXml(f.getTopLeftCell())).append("\" ");
-            sb.append("state=\"frozen\"/></sheetView></sheetViews>\n");
+            writer.write("  <sheetViews><sheetView workbookViewId=\"0\"><pane ");
+            if (f.getXSplit() != null) {
+                writer.write("xSplit=\"");
+                writer.write(String.valueOf(f.getXSplit()));
+                writer.write("\" ");
+            }
+            if (f.getYSplit() != null) {
+                writer.write("ySplit=\"");
+                writer.write(String.valueOf(f.getYSplit()));
+                writer.write("\" ");
+            }
+            if (f.getTopLeftCell() != null) {
+                writer.write("topLeftCell=\"");
+                writer.write(escapeXml(f.getTopLeftCell()));
+                writer.write("\" ");
+            }
+            writer.write("state=\"frozen\"/></sheetView></sheetViews>\n");
         }
 
         if (sheet != null && !sheet.getColumns().isEmpty()) {
-            sb.append("  <cols>");
+            writer.write("  <cols>");
             for (int i = 0; i < sheet.getColumns().size(); i++) {
                 ColumnDefinition col = sheet.getColumns().get(i);
-                sb.append("<col min=\"").append(i + 1).append("\" max=\"").append(i + 1)
-                        .append("\" width=\"").append(col.getWidth()).append("\" customWidth=\"1\"/>");
+                writer.write("<col min=\"");
+                writer.write(String.valueOf(i + 1));
+                writer.write("\" max=\"");
+                writer.write(String.valueOf(i + 1));
+                writer.write("\" width=\"");
+                writer.write(String.valueOf(col.getWidth()));
+                writer.write("\" customWidth=\"1\"/>");
             }
-            sb.append("</cols>\n");
+            writer.write("</cols>\n");
         }
 
-        sb.append("  <sheetData>\n");
+        String[] headerArr = headers.toArray(new String[0]);
+        String[] columnNames = columnNames(headerArr.length);
+
+        writer.write("  <sheetData>\n");
+        writeRow(writer, 1, headerArr, columnNames);
+        List<Row> rows = sheet != null ? sheet.getRows() : Collections.<Row>emptyList();
         for (int r = 0; r < rows.size(); r++) {
-            Object[] rowData = rows.get(r);
-            int rowNumber = r + 1;
-            sb.append("    <row r=\"").append(rowNumber).append("\">");
-            for (int c = 0; c < rowData.length; c++) {
-                String ref = columnName(c + 1) + rowNumber;
-                sb.append(cellXml(rowData[c], ref));
+            Row row = rows.get(r);
+            int rowNumber = r + 2;
+            writer.write("    <row r=\"");
+            writer.write(String.valueOf(rowNumber));
+            writer.write("\">");
+            for (int c = 0; c < headerArr.length; c++) {
+                writeCellXml(writer, row.get(headerArr[c]), columnNames[c], rowNumber);
             }
-            sb.append("</row>\n");
+            writer.write("</row>\n");
         }
-        sb.append("  </sheetData>\n");
+        writer.write("  </sheetData>\n");
 
         if (sheet != null && !sheet.getTables().isEmpty()) {
-            sb.append("  <autoFilter ref=\"").append(escapeXml(sheet.getTables().get(0).getRange())).append("\"/>\n");
+            writer.write("  <autoFilter ref=\"");
+            writer.write(escapeXml(sheet.getTables().get(0).getRange()));
+            writer.write("\"/>\n");
         }
         if (sheet != null && !sheet.getMerges().isEmpty()) {
-            sb.append("  <mergeCells count=\"").append(sheet.getMerges().size()).append("\">");
+            writer.write("  <mergeCells count=\"");
+            writer.write(String.valueOf(sheet.getMerges().size()));
+            writer.write("\">");
             for (String merge : sheet.getMerges()) {
-                sb.append("<mergeCell ref=\"").append(escapeXml(merge)).append("\"/>");
+                writer.write("<mergeCell ref=\"");
+                writer.write(escapeXml(merge));
+                writer.write("\"/>");
             }
-            sb.append("</mergeCells>\n");
+            writer.write("</mergeCells>\n");
         }
         if (sheet != null && !sheet.getValidations().isEmpty()) {
-            sb.append("  <dataValidations count=\"").append(sheet.getValidations().size()).append("\">");
+            writer.write("  <dataValidations count=\"");
+            writer.write(String.valueOf(sheet.getValidations().size()));
+            writer.write("\">");
             for (DataValidation dv : sheet.getValidations()) {
-                sb.append("<dataValidation type=\"").append(dv.getType())
-                        .append("\" sqref=\"").append(escapeXml(dv.getRange())).append("\">");
+                writer.write("<dataValidation type=\"");
+                writer.write(dv.getType());
+                writer.write("\" sqref=\"");
+                writer.write(escapeXml(dv.getRange()));
+                writer.write("\">");
                 if (dv.getFormula() != null) {
-                    sb.append("<formula1>").append(escapeXml(dv.getFormula())).append("</formula1>");
+                    writer.write("<formula1>");
+                    writer.write(escapeXml(dv.getFormula()));
+                    writer.write("</formula1>");
                 }
-                sb.append("</dataValidation>");
+                writer.write("</dataValidation>");
             }
-            sb.append("</dataValidations>\n");
+            writer.write("</dataValidations>\n");
         }
 
-        sb.append("</worksheet>");
-        return sb.toString();
+        writer.write("</worksheet>");
     }
 
-    private static String cellXml(Object value, String ref) {
+    private static void writeRow(Writer writer, int rowNumber, Object[] values, String[] columnNames) throws IOException {
+        writer.write("    <row r=\"");
+        writer.write(String.valueOf(rowNumber));
+        writer.write("\">");
+        for (int c = 0; c < values.length; c++) {
+            writeCellXml(writer, values[c], columnNames[c], rowNumber);
+        }
+        writer.write("</row>\n");
+    }
+
+    private static void writeCellXml(Writer writer, Object value, String columnName, int rowNumber) throws IOException {
+        writer.write("<c r=\"");
+        writer.write(columnName);
+        writer.write(String.valueOf(rowNumber));
+        writer.write("\"");
         if (value instanceof FormulaCell) {
             FormulaCell fc = (FormulaCell) value;
             String f = fc.getFormula().startsWith("=") ? fc.getFormula().substring(1) : fc.getFormula();
-            String valXml = fc.getResult() != null ? "<v>" + escapeXml(String.valueOf(fc.getResult())) + "</v>" : "";
-            return "<c r=\"" + ref + "\"><f>" + escapeXml(f) + "</f>" + valXml + "</c>";
+            writer.write("><f>");
+            writer.write(escapeXml(f));
+            writer.write("</f>");
+            if (fc.getResult() != null) {
+                writer.write("<v>");
+                writer.write(escapeXml(String.valueOf(fc.getResult())));
+                writer.write("</v>");
+            }
+            writer.write("</c>");
+            return;
         }
-        if (value == null) return "<c r=\"" + ref + "\"/>";
-        if (value instanceof Number) return "<c r=\"" + ref + "\"><v>" + value + "</v></c>";
-        if (value instanceof Boolean) return "<c r=\"" + ref + "\" t=\"b\"><v>" + ((Boolean) value ? 1 : 0) + "</v></c>";
+        if (value == null) {
+            writer.write("/>");
+            return;
+        }
+        if (value instanceof Number) {
+            writer.write("><v>");
+            writer.write(String.valueOf(value));
+            writer.write("</v></c>");
+            return;
+        }
+        if (value instanceof Boolean) {
+            writer.write(" t=\"b\"><v>");
+            writer.write((Boolean) value ? "1" : "0");
+            writer.write("</v></c>");
+            return;
+        }
+        writer.write(" t=\"inlineStr\"><is><t>");
         if (value instanceof Date) {
-            return "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t>" + escapeXml(((Date) value).toInstant().toString()) + "</t></is></c>";
+            writer.write(escapeXml(((Date) value).toInstant().toString()));
+        } else {
+            writer.write(escapeXml(String.valueOf(value)));
         }
-        return "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t>" + escapeXml(String.valueOf(value)) + "</t></is></c>";
+        writer.write("</t></is></c>");
+    }
+
+    private static String[] columnNames(int count) {
+        String[] names = new String[count];
+        for (int i = 0; i < count; i++) {
+            names[i] = columnName(i + 1);
+        }
+        return names;
     }
 
     static String columnName(int index) {
