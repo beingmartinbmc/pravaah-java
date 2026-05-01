@@ -7,6 +7,8 @@ import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
 import io.github.beingmartinbmc.pravaah.pipeline.PravaahPipeline;
 import io.github.beingmartinbmc.pravaah.query.QueryEngine;
+import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
+import io.github.beingmartinbmc.pravaah.internal.validation.SchemaValidationRunner;
 import io.github.beingmartinbmc.pravaah.schema.*;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxReader;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxWriter;
@@ -22,6 +24,10 @@ import java.util.*;
 public final class Pravaah {
 
     private Pravaah() {}
+
+    public static String runtimeImplementation() {
+        return RuntimeSupport.implementation();
+    }
 
     // --- Read ---
 
@@ -94,6 +100,9 @@ public final class Pravaah {
     // --- Parse ---
 
     public static List<Row> parse(byte[] data, SchemaDefinition definition, ReadOptions options) throws IOException {
+        if (options.getFormat() == PravaahFormat.CSV) {
+            return parseDetailedCsv(new ByteArrayInputStream(data), definition, options).getRows();
+        }
         PravaahPipeline pipeline = read(data, options);
         List<Row> raw = pipeline.collect();
         ValidationMode mode = options.getValidation() != null ? options.getValidation() : ValidationMode.COLLECT;
@@ -102,6 +111,10 @@ public final class Pravaah {
     }
 
     public static List<Row> parse(String filePath, SchemaDefinition definition, ReadOptions options) throws IOException {
+        PravaahFormat format = options.getFormat() != null ? options.getFormat() : PravaahFormat.fromExtension(filePath);
+        if (format == PravaahFormat.CSV) {
+            return parseDetailedCsv(new FileInputStream(filePath), definition, options).getRows();
+        }
         List<Row> raw = read(filePath, options).collect();
         ValidationMode mode = options.getValidation() != null ? options.getValidation() : ValidationMode.COLLECT;
         ProcessResult result = SchemaValidator.validateRows(raw, definition, mode, options.getCleaning());
@@ -111,6 +124,9 @@ public final class Pravaah {
     // --- Parse Detailed ---
 
     public static ProcessResult parseDetailed(byte[] data, SchemaDefinition definition, ReadOptions options) throws IOException {
+        if (options.getFormat() == PravaahFormat.CSV) {
+            return parseDetailedCsv(new ByteArrayInputStream(data), definition, options);
+        }
         List<Row> raw = read(data, options).collect();
         ProcessStats stats = PerfUtils.createStats();
         List<Row> validRows = new ArrayList<>(raw.size());
@@ -147,8 +163,19 @@ public final class Pravaah {
     }
 
     public static ProcessResult parseDetailed(String filePath, SchemaDefinition definition, ReadOptions options) throws IOException {
+        PravaahFormat format = options.getFormat() != null ? options.getFormat() : PravaahFormat.fromExtension(filePath);
+        if (format == PravaahFormat.CSV) {
+            return parseDetailedCsv(new FileInputStream(filePath), definition, options);
+        }
         List<Row> raw = read(filePath, options).collect();
         return parseDetailed(raw, definition, options);
+    }
+
+    private static ProcessResult parseDetailedCsv(InputStream stream, SchemaDefinition definition, ReadOptions options) throws IOException {
+        ValidationMode mode = options.getValidation() != null ? options.getValidation() : ValidationMode.COLLECT;
+        SchemaValidationRunner runner = new SchemaValidationRunner(definition, mode, options.getCleaning());
+        CsvReader.scanRows(stream, options, runner::accept);
+        return runner.finish();
     }
 
     private static ProcessResult parseDetailed(List<Row> raw, SchemaDefinition definition, ReadOptions options) {

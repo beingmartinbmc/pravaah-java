@@ -2,7 +2,8 @@
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CP="$PROJECT_DIR/target/classes:$PROJECT_DIR/target/test-classes:$PROJECT_DIR/benchmark-libs/*"
+JAR="$PROJECT_DIR/target/pravaah-java-1.0.0-SNAPSHOT.jar"
+CP="$JAR:$PROJECT_DIR/target/test-classes:$PROJECT_DIR/benchmark-libs/*"
 MAIN="io.github.beingmartinbmc.pravaah.BenchmarkRunner"
 RESULTS_DIR="$PROJECT_DIR/benchmark-results"
 mkdir -p "$RESULTS_DIR"
@@ -17,15 +18,13 @@ if ! ls "$PROJECT_DIR"/benchmark-libs/*.jar >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "Compiling Pravaah and benchmark runner..."
-mkdir -p "$PROJECT_DIR/target/classes" "$PROJECT_DIR/target/test-classes"
+echo "Packaging Pravaah MR-JAR and compiling benchmark runner..."
+mkdir -p "$PROJECT_DIR/target/test-classes"
 JAVAC8="${JDK8%/bin/java}/bin/javac"
 "$JDK8" -version >/dev/null 2>&1
-(cd "$PROJECT_DIR" && "$JAVAC8" -source 1.8 -target 1.8 \
-    -d "$PROJECT_DIR/target/classes" \
-    $(rg --files src/main/java | tr '\n' ' '))
+(cd "$PROJECT_DIR" && mvn -q -DskipTests package)
 "$JAVAC8" -source 1.8 -target 1.8 \
-    -cp "$PROJECT_DIR/target/classes:$PROJECT_DIR/benchmark-libs/*" \
+    -cp "$JAR:$PROJECT_DIR/benchmark-libs/*" \
     -d "$PROJECT_DIR/target/test-classes" \
     "$PROJECT_DIR/src/test/java/io/github/beingmartinbmc/pravaah/BenchmarkRunner.java"
 

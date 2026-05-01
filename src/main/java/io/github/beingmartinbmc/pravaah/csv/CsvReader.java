@@ -2,9 +2,14 @@ package io.github.beingmartinbmc.pravaah.csv;
 
 import io.github.beingmartinbmc.pravaah.ReadOptions;
 import io.github.beingmartinbmc.pravaah.Row;
+import io.github.beingmartinbmc.pravaah.internal.csv.CsvRecordSink;
+import io.github.beingmartinbmc.pravaah.internal.csv.CsvRecordScanner;
+import io.github.beingmartinbmc.pravaah.internal.csv.DefaultRowMaterializer;
+import io.github.beingmartinbmc.pravaah.internal.csv.DirectCsvRecordScanner;
+import io.github.beingmartinbmc.pravaah.internal.csv.RowMaterializer;
+import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -13,9 +18,7 @@ import java.util.*;
  */
 public final class CsvReader {
 
-    private static final int QUOTE = '"';
-    private static final int CR = '\r';
-    private static final int LF = '\n';
+    private static final CsvRecordScanner SCANNER = new DirectCsvRecordScanner();
 
     private CsvReader() {}
 
@@ -38,50 +41,39 @@ public final class CsvReader {
         }
 
         int initialCapacity = Math.max(16, stream.available());
-        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        try {
-            String text = readFully(reader, initialCapacity);
-            return parseText(text, delimiter, useHeaders, explicitHeaders, inferTypes);
-        } finally {
-            reader.close();
-        }
+        String text = RuntimeSupport.readUtf8(stream, initialCapacity);
+        return parseText(text, delimiter, useHeaders, explicitHeaders, inferTypes);
     }
 
     static List<Row> parseText(String text, char delimiter, boolean autoHeaders,
                                 List<String> explicitHeaders, boolean inferTypes) {
         List<Row> rows = new ArrayList<>();
+        scanRowsText(text, delimiter, autoHeaders, explicitHeaders, inferTypes,
+                (row, rowNumber) -> rows.add(row));
+        return rows;
+    }
+
+    public static void scanRows(InputStream stream, ReadOptions options, RowConsumer consumer) throws IOException {
+        if (options.getDelimiter().length() > 1) {
+            throw new IllegalArgumentException("delimiter must be a single character");
+        }
+
+        boolean useHeaders = options.getHeaders() == null || options.getHeaders();
+        boolean inferTypes = options.isInferTypes();
+        char delimiter = options.getDelimiter().charAt(0);
+        int initialCapacity = Math.max(16, stream.available());
+        String text = RuntimeSupport.readUtf8(stream, initialCapacity);
+        scanRowsText(text, delimiter, useHeaders, options.getHeaderNames(), inferTypes, consumer);
+    }
+
+    private static void scanRowsText(String text, char delimiter, boolean autoHeaders,
+                                     List<String> explicitHeaders, boolean inferTypes,
+                                     RowConsumer consumer) {
         String[] headers = explicitHeaders != null ? explicitHeaders.toArray(new String[0]) : null;
         boolean needAutoHeaders = explicitHeaders == null && autoHeaders;
         boolean headerless = !autoHeaders && explicitHeaders == null;
-
-        int cursor = 0;
-        while (cursor < text.length()) {
-            ParseResult result = parseNextRecord(text, cursor, delimiter);
-            if (result == null) {
-                String[] fields = parseLastRecord(text.substring(cursor), delimiter);
-                if (fields != null && !isEmptyRecord(fields)) {
-                    if (needAutoHeaders && headers == null) {
-                        break;
-                    }
-                    rows.add(buildRow(fields, headers, headerless, inferTypes));
-                }
-                break;
-            }
-
-            String[] fields = result.fields;
-            cursor = result.nextCursor;
-
-            if (isEmptyRecord(fields)) continue;
-
-            if (needAutoHeaders && headers == null) {
-                headers = fields;
-                continue;
-            }
-
-            rows.add(buildRow(fields, headers, headerless, inferTypes));
-        }
-
-        return rows;
+        RowCollectorSink sink = new RowCollectorSink(headers, needAutoHeaders, headerless, inferTypes, consumer);
+        SCANNER.scan(text, delimiter, sink);
     }
 
     public static int drainCount(byte[] data, ReadOptions options) throws IOException {
@@ -101,247 +93,10 @@ public final class CsvReader {
         char delimiter = options.getDelimiter().charAt(0);
 
         int initialCapacity = Math.max(16, stream.available());
-        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        try {
-            String text = readFully(reader, initialCapacity);
-            return scanRecordCount(text, delimiter, skipFirst);
-        } finally {
-            reader.close();
-        }
-    }
-
-    private static int scanRecordCount(String text, char delimiter, boolean skipFirst) {
-        boolean inQuotes = false;
-        boolean quotePending = false;
-        boolean atFieldStart = true;
-        boolean recordHasContent = false;
-        int records = 0;
-        int rows = 0;
-        boolean lastWasCR = false;
-
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-
-            if (lastWasCR) {
-                lastWasCR = false;
-                if (c == LF) continue;
-            }
-
-            if (inQuotes && c == QUOTE) {
-                if (quotePending) {
-                    quotePending = false;
-                    recordHasContent = true;
-                } else {
-                    quotePending = true;
-                }
-                continue;
-            }
-
-            if (quotePending && c == delimiter) {
-                inQuotes = false;
-                quotePending = false;
-                atFieldStart = true;
-                continue;
-            }
-
-            if (quotePending && (c == LF || c == CR)) {
-                inQuotes = false;
-                quotePending = false;
-                if (recordHasContent) {
-                    records++;
-                    if (!(skipFirst && records == 1)) rows++;
-                }
-                recordHasContent = false;
-                atFieldStart = true;
-                lastWasCR = (c == CR);
-                continue;
-            }
-
-            if (quotePending) throw new IllegalStateException("Invalid quoted CSV field");
-
-            if (!inQuotes && (c == LF || c == CR)) {
-                if (recordHasContent) {
-                    records++;
-                    if (!(skipFirst && records == 1)) rows++;
-                }
-                recordHasContent = false;
-                atFieldStart = true;
-                lastWasCR = (c == CR);
-                continue;
-            }
-
-            if (!inQuotes && c == delimiter) {
-                atFieldStart = true;
-                continue;
-            }
-
-            if (!inQuotes && c == QUOTE && atFieldStart) {
-                inQuotes = true;
-                atFieldStart = false;
-                continue;
-            }
-
-            recordHasContent = true;
-            atFieldStart = false;
-        }
-
-        if (inQuotes && !quotePending) throw new IllegalStateException("Unclosed quoted CSV field");
-        if (quotePending) {
-            inQuotes = false;
-            quotePending = false;
-        }
-        if (recordHasContent) {
-            records++;
-            if (!(skipFirst && records == 1)) rows++;
-        }
-
-        return rows;
-    }
-
-    static ParseResult parseNextRecord(String text, int start, char delim) {
-        List<String> fields = new ArrayList<>();
-        int cursor = start;
-        int fieldStart = cursor;
-        boolean inQuotes = false;
-
-        while (cursor < text.length()) {
-            char c = text.charAt(cursor);
-
-            if (inQuotes) {
-                if (c == QUOTE) {
-                    if (cursor + 1 < text.length() && text.charAt(cursor + 1) == QUOTE) {
-                        cursor += 2;
-                        continue;
-                    }
-                    inQuotes = false;
-                    cursor++;
-                    continue;
-                }
-                cursor++;
-                continue;
-            }
-
-            if (c == QUOTE && cursor == fieldStart) {
-                inQuotes = true;
-                cursor++;
-                continue;
-            }
-
-            if (c == delim) {
-                fields.add(extractField(text, fieldStart, cursor));
-                cursor++;
-                fieldStart = cursor;
-                continue;
-            }
-
-            if (c == CR || c == LF) {
-                fields.add(extractField(text, fieldStart, cursor));
-                cursor++;
-                if (c == CR && cursor < text.length() && text.charAt(cursor) == LF) {
-                    cursor++;
-                }
-                return new ParseResult(fields.toArray(new String[0]), cursor);
-            }
-
-            cursor++;
-        }
-
-        if (inQuotes) return null;
-        return null;
-    }
-
-    static String[] parseLastRecord(String text, char delim) {
-        List<String> fields = new ArrayList<>();
-        int cursor = 0;
-        int fieldStart = 0;
-        boolean inQuotes = false;
-
-        while (cursor < text.length()) {
-            char c = text.charAt(cursor);
-
-            if (inQuotes) {
-                if (c == QUOTE) {
-                    if (cursor + 1 < text.length() && text.charAt(cursor + 1) == QUOTE) {
-                        cursor += 2;
-                        continue;
-                    }
-                    inQuotes = false;
-                    cursor++;
-                    continue;
-                }
-                cursor++;
-                continue;
-            }
-
-            if (c == QUOTE && cursor == fieldStart) {
-                inQuotes = true;
-                cursor++;
-                continue;
-            }
-
-            if (c == delim) {
-                fields.add(extractField(text, fieldStart, cursor));
-                cursor++;
-                fieldStart = cursor;
-                continue;
-            }
-
-            if (c == CR || c == LF) {
-                fields.add(extractField(text, fieldStart, cursor));
-                cursor++;
-                if (c == CR && cursor < text.length() && text.charAt(cursor) == LF) {
-                    cursor++;
-                }
-                fieldStart = cursor;
-                continue;
-            }
-
-            cursor++;
-        }
-
-        if (inQuotes) return null;
-        fields.add(extractField(text, fieldStart, cursor));
-        return fields.toArray(new String[0]);
-    }
-
-    private static String extractField(String text, int start, int end) {
-        if (start >= end) return "";
-        if (text.charAt(start) == QUOTE && end > start + 1 && text.charAt(end - 1) == QUOTE) {
-            return text.substring(start + 1, end - 1).replace("\"\"", "\"");
-        }
-        return text.substring(start, end);
-    }
-
-    private static boolean isEmptyRecord(String[] fields) {
-        for (String f : fields) {
-            if (!f.isEmpty()) return false;
-        }
-        return true;
-    }
-
-    private static Row buildRow(String[] fields, String[] headers, boolean headerless, boolean inferTypes) {
-        int size = headers != null && !headerless ? headers.length : fields.length;
-        Row row = new Row(mapCapacity(size));
-        if (headerless) {
-            for (int i = 0; i < fields.length; i++) {
-                String key = "_" + (i + 1);
-                row.put(key, inferTypes ? inferValue(fields[i]) : fields[i]);
-            }
-        } else if (headers != null) {
-            for (int i = 0; i < headers.length; i++) {
-                String value = i < fields.length ? fields[i] : null;
-                row.put(headers[i], inferTypes ? inferValue(value) : value);
-            }
-        } else {
-            for (int i = 0; i < fields.length; i++) {
-                row.put("_" + (i + 1), inferTypes ? inferValue(fields[i]) : fields[i]);
-            }
-        }
-        return row;
-    }
-
-    private static int mapCapacity(int entries) {
-        return Math.max(4, (int) (entries / 0.75f) + 1);
+        String text = RuntimeSupport.readUtf8(stream, initialCapacity);
+        CountSink sink = new CountSink(skipFirst);
+        SCANNER.scan(text, delimiter, sink);
+        return sink.rows;
     }
 
     public static Object inferValue(String value) {
@@ -360,23 +115,95 @@ public final class CsvReader {
         return value;
     }
 
-    private static String readFully(Reader reader, int initialCapacity) throws IOException {
-        StringBuilder sb = new StringBuilder(initialCapacity);
-        char[] buffer = new char[8192];
-        int read;
-        while ((read = reader.read(buffer)) != -1) {
-            sb.append(buffer, 0, read);
+    private static class CountSink implements CsvRecordSink {
+        private final boolean skipFirst;
+        private boolean empty;
+        private int records;
+        private int rows;
+
+        CountSink(boolean skipFirst) {
+            this.skipFirst = skipFirst;
         }
-        return sb.toString();
+
+        @Override
+        public void startRecord() {
+            empty = true;
+        }
+
+        @Override
+        public void field(int index, String value) {
+            if (value != null && !value.isEmpty()) {
+                empty = false;
+            }
+        }
+
+        @Override
+        public void endRecord() {
+            if (empty) return;
+            records++;
+            if (!(skipFirst && records == 1)) {
+                rows++;
+            }
+        }
     }
 
-    static class ParseResult {
-        final String[] fields;
-        final int nextCursor;
+    private static class RowCollectorSink implements CsvRecordSink {
+        private final boolean needAutoHeaders;
+        private final boolean headerless;
+        private final boolean inferTypes;
+        private final RowConsumer consumer;
+        private String[] headers;
+        private List<String> headerFields;
+        private RowMaterializer materializer;
+        private boolean empty;
+        private int rowNumber = 1;
 
-        ParseResult(String[] fields, int nextCursor) {
-            this.fields = fields;
-            this.nextCursor = nextCursor;
+        RowCollectorSink(String[] headers, boolean needAutoHeaders, boolean headerless,
+                         boolean inferTypes, RowConsumer consumer) {
+            this.headers = headers;
+            this.needAutoHeaders = needAutoHeaders;
+            this.headerless = headerless;
+            this.inferTypes = inferTypes;
+            this.consumer = consumer;
+        }
+
+        @Override
+        public void startRecord() {
+            empty = true;
+            if (needAutoHeaders && headers == null) {
+                headerFields = new ArrayList<>();
+                materializer = null;
+            } else {
+                materializer = new DefaultRowMaterializer(headers, headerless, inferTypes);
+                materializer.startRecord();
+            }
+        }
+
+        @Override
+        public void field(int index, String value) {
+            if (value != null && !value.isEmpty()) {
+                empty = false;
+            }
+            if (headerFields != null) {
+                headerFields.add(value);
+            } else {
+                materializer.field(index, value);
+            }
+        }
+
+        @Override
+        public void endRecord() {
+            if (empty) return;
+            if (headerFields != null) {
+                headers = headerFields.toArray(new String[0]);
+                headerFields = null;
+                return;
+            }
+
+            Row row = materializer.finishRecord();
+            if (row != null) {
+                consumer.accept(row, rowNumber++);
+            }
         }
     }
 }

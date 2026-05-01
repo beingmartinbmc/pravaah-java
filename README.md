@@ -2,7 +2,7 @@
 
 **Replace 300 lines of fragile CSV/Excel glue code with 10.**
 
-Schema-first, streaming data pipeline library for **CSV, XLSX, and JSON** in Java 8+. Zero dependencies in production. Type-safe validation, cleaning, deduplication, and formula evaluation -- all in a fluent pipeline.
+Schema-first, streaming data pipeline library for **CSV, XLSX, and JSON** in Java 8+. Zero dependencies in production. Type-safe validation, cleaning, deduplication, and formula evaluation -- all in a fluent pipeline. CSV uses a direct scanner hot path that can count, materialize rows, or validate without first building `String[]` records.
 
 > *Pravaah* (Hindi: प्रवाह) means "flow" -- data flows through schemas, gets cleaned, validated, and lands where you need it.
 
@@ -162,8 +162,8 @@ Every other library gives you a `List<String[]>`. You still need to:
 | Observation | Details |
 |---|---|
 | **JDK 8 has lowest parse latency** | Parallel GC with 6 GB heap runs aggressively; good for batch parsing but higher peak memory |
-| **JDK 11+ can reduce memory** | G1GC often keeps competitor parsers much lower-memory, though object-heavy row materialization still dominates Pravaah |
-| **Validation hotspot was fixed** | Full schema validation on JDK 8 improved from 1,937 ms to 380 ms by sampling memory every 4,096 rows instead of every row |
+| **JDK 11+ can reduce memory** | G1GC often keeps competitor parsers much lower-memory, though row materialization still dominates raw parsing work |
+| **Validation hotspot was fixed** | Full schema validation on JDK 8 improved from 1,937 ms to 380 ms by sampling memory every 4,096 rows instead of every row; CSV validation now also uses a direct scanner-to-validation path |
 | **uniVocity fastest raw parser** | Consistently #1 for raw CSV parsing across all JDKs |
 | **Pravaah's value is in the pipeline** | Still slower than uniVocity for raw parsing, but the only library here with built-in validation, coercion, and error collection |
 
@@ -298,7 +298,7 @@ registry.use(new PravaahPlugin("crm")
 
 | Module | Description |
 |---|---|
-| `csv` | RFC 4180 compliant streaming CSV parser and writer. Handles quoted fields, multi-line values, CRLF, custom delimiters. |
+| `csv` | RFC 4180 compliant direct scanner and writer. Handles quoted fields, multi-line values, CRLF, custom delimiters, count-only scans, row materialization, and validation sinks. |
 | `xlsx` | Zero-dependency XLSX reader and writer using ZIP + XML. Multi-sheet, formulas, frozen panes, data validation. |
 | `schema` | Declarative field definitions: STRING, NUMBER, BOOLEAN, DATE, EMAIL, PHONE, ANY. Coercion, defaults, custom validators. |
 | `formula` | Expression engine with SUM, AVERAGE, MIN, MAX, COUNT, IF, CONCAT. Arithmetic parser. Extensible. |
@@ -307,6 +307,19 @@ registry.use(new PravaahPlugin("crm")
 | `pipeline` | Lazy evaluation pipeline: map, filter, clean, schema, take. Terminal ops: collect, drain, process, write. |
 | `plugin` | Extensible registry for custom validators and formula functions. |
 | `perf` | Processing stats: duration, row counts, peak memory, timing. |
+
+---
+
+## Runtime Architecture
+
+Pravaah keeps the public API shared and moves hot-path choices behind internal interfaces:
+
+- `Utf8Reader` / `InputScanner` reads input using the best implementation available for the running JVM.
+- `CsvRecordScanner` performs one pass over CSV text and emits fields directly to a sink.
+- `RowMaterializer` builds `Row` objects only when callers need rows.
+- `ValidationRunner` validates scanner output directly for `Pravaah.parse(...)` and `parseDetailed(...)`, avoiding an intermediate raw-row list for CSV validation.
+
+This preserves Java 8 compatibility while letting Java 11 and Java 17 overlays replace runtime internals through the MR-JAR.
 
 ---
 
@@ -342,13 +355,13 @@ All types support `.optional(true)`, `.defaultValue(x)`, `.coerce(false)`, and `
 # Download CSV + spreadsheet competitor JARs (one-time)
 ./download-benchmark-libs.sh
 
-# Compile the library + benchmark runner, then run across all JDK versions.
+# Package the MR-JAR + benchmark runner, then run across all JDK versions.
 # BenchmarkRunner is intentionally excluded from normal `mvn test` so Maven
 # does not need competitor dependencies.
 chmod +x run-benchmark.sh && ./run-benchmark.sh
 ```
 
-The benchmark generates CSV files (10K to 1M rows), runs each test 5 times after 3 warmup iterations, and reports median timings. Results are saved to `benchmark-results/`.
+The benchmark generates CSV files (10K to 1M rows), runs each test 5 times after 3 warmup iterations, and reports median timings. Results are saved to `benchmark-results/`. The runner executes the packaged MR-JAR so Java 11/17 runtime overlays are active during benchmark runs.
 
 ---
 
@@ -358,13 +371,32 @@ The benchmark generates CSV files (10K to 1M rows), runs each test 5 times after
 mvn test
 ```
 
-**205 tests** covering all modules with 90%+ code coverage.
+**207 tests** covering all modules with 90%+ code coverage.
 
 ---
 
 ## Java 8 Compatibility
 
 Pravaah targets Java 8 (`-source 1.8 -target 1.8`). No `var`, no records, no text blocks, no `List.of()`. Tested and benchmarked on Java 8, 11, 17, and 25.
+
+### Multi-Release JAR
+
+Pravaah is packaged as a **Multi-Release JAR**:
+
+| Source set | Runtime target | Purpose |
+|---|---|---|
+| `src/main/java` | Java 8 baseline | Portable implementation for all JVMs |
+| `src/main/java11` | Java 11+ override | Uses newer JDK APIs where they improve hot paths |
+| `src/main/java17` | Java 17+ override | Preferred implementation on modern LTS JVMs |
+
+The JVM automatically loads the newest compatible class from `META-INF/versions/*` at runtime. For example, Java 8 uses the baseline `RuntimeSupport`, Java 11 uses the Java 11 overlay, and Java 17+ uses the Java 17 overlay. Those overlays provide runtime-specific implementations for internal readers such as `Utf8Reader` and `InputScanner`; schema definitions, validation behavior, and the pipeline API remain shared.
+
+```java
+System.out.println(Pravaah.runtimeImplementation());
+// java8, java11, or java17 depending on runtime
+```
+
+Build note: creating the multi-release artifact requires a JDK that can compile the Java 11 and Java 17 overlays. The generated JAR still runs on Java 8.
 
 ---
 
