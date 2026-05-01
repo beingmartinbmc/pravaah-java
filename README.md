@@ -20,7 +20,7 @@ CSV direct count: 7,046,063 rows, 145MB
 Pravaah Java  330ms on JDK 17
 
 CSV read/count: 1,004,894 rows, 244MB
-Pravaah Java  348ms read/count on JDK 17
+Pravaah Java  354ms read/count on JDK 17
 ```
 
 Benchmarked locally on the repository benchmark files using JDK 8, 11, and 17 on Apple Silicon.
@@ -147,10 +147,15 @@ error,invalid_value,total cannot be negative,203,total,number,-50.00
 ## How It Works
 
 ```text
-File: CSV/XLS/XLSX/JSON
-        |
-        v
-Read rows -> Clean headers/values -> Validate schema -> Transform/filter -> Output/report
+┌──────────────┐    ┌─────────┐    ┌──────────┐    ┌───────────┐    ┌──────────┐
+│     File     │───▶│  Clean  │───▶│ Validate │───▶│ Transform │───▶│  Output  │
+│ CSV/XLS/XLSX │    │ headers │    │  schema  │    │  map/filt │    │ file/db  │
+│     JSON     │    │ values  │    │          │    │           │    │ reports  │
+└──────────────┘    └─────────┘    └──────────┘    └───────────┘    └──────────┘
+                          │               │                │
+                          ▼               ▼                ▼
+                    fuzzy match     type-safe rows    fused stages
+                    trim/dedupe     issue report      one pass
 ```
 
 CSV uses a direct scanner that can emit to a count-only sink, row materializer, or validation sink. XLSX uses selective ZIP/XML parsing. XLS uses an internal OLE2 + BIFF8 reader, so legacy Excel reads do not require Apache POI.
@@ -359,43 +364,43 @@ CSV workloads are benchmarked against CSV competitors: uniVocity, Apache Commons
 CSV: 7,046,063 rows, 145MB on JDK 17 - time (lower is better)
 ──────────────────────────────────────────────────────────────
 Pravaah     ■■■■■■■                         330ms
-uniVocity   ■■■■■■■■                        407ms
-Commons CSV ■■■■■■■■■■■■■■■■■■■■          1.00s
-Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■■      1.19s
-OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■  1.40s
+uniVocity   ■■■■■■■■                        400ms
+Jackson CSV ■■■■■■■■■■■■■■■■■■■           972ms
+Commons CSV ■■■■■■■■■■■■■■■■■■■■■         1.05s
+OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■  1.42s
 
 CSV: 1,004,894 rows, 244MB on JDK 17 - time (lower is better)
 ──────────────────────────────────────────────────────────────
-Pravaah     ■■■■■■■■■■                      348ms
-uniVocity   ■■■■■■■■■■                      351ms
-Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■       853ms
-Commons CSV ■■■■■■■■■■■■■■■■■■■■■■■■      888ms
-OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■   986ms
+uniVocity   ■■■■■■■■■■                      349ms
+Pravaah     ■■■■■■■■■■                      354ms
+Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■       859ms
+Commons CSV ■■■■■■■■■■■■■■■■■■■■■■■■      903ms
+OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■   1.01s
 ```
 
 #### JDK 8
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 3 ms | 2 ms | 2 ms | 5 ms | 2 ms |
-| CSV | 244 MB | 1,004,894 | 403 ms | 312 ms | 862 ms | 763 ms | 718 ms |
-| CSV | 145 MB | 7,046,063 | 341 ms | 390 ms | 814 ms | 804 ms | 827 ms |
+| CSV | 498 KB | 1,000 | 3 ms | 1 ms | 2 ms | 5 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 404 ms | 314 ms | 862 ms | 787 ms | 726 ms |
+| CSV | 145 MB | 7,046,063 | 344 ms | 391 ms | 810 ms | 803 ms | 826 ms |
 
 #### JDK 11
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 4 ms | 4 ms | 2 ms | 6 ms | 4 ms |
-| CSV | 244 MB | 1,004,894 | 405 ms | 376 ms | 929 ms | 898 ms | 955 ms |
-| CSV | 145 MB | 7,046,063 | 363 ms | 458 ms | 1.15 s | 1.27 s | 1.21 s |
+| CSV | 498 KB | 1,000 | 4 ms | 3 ms | 2 ms | 8 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 381 ms | 420 ms | 919 ms | 899 ms | 952 ms |
+| CSV | 145 MB | 7,046,063 | 358 ms | 385 ms | 1.15 s | 1.27 s | 1.24 s |
 
 #### JDK 17
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 4 ms | 2 ms | 2 ms | 5 ms | 3 ms |
-| CSV | 244 MB | 1,004,894 | 348 ms | 351 ms | 888 ms | 986 ms | 853 ms |
-| CSV | 145 MB | 7,046,063 | 330 ms | 407 ms | 1.00 s | 1.40 s | 1.19 s |
+| CSV | 498 KB | 1,000 | 3 ms | 3 ms | 3 ms | 6 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 354 ms | 349 ms | 903 ms | 1.01 s | 859 ms |
+| CSV | 145 MB | 7,046,063 | 330 ms | 400 ms | 1.05 s | 1.42 s | 972 ms |
 
 ### Spreadsheet Read
 
@@ -404,40 +409,81 @@ Spreadsheet workloads are benchmarked against corresponding spreadsheet competit
 ```text
 XLSX: 35,808 rows, 1.5MB on JDK 17 - time (lower is better)
 ──────────────────────────────────────────────────────────────
-Pravaah   ■■■■■                           96ms
-EasyExcel ■■■■■■■                         142ms
-POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    513ms
+Pravaah   ■■■■■                           91ms
+EasyExcel ■■■■■■■                         145ms
+POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    510ms
 
 XLS: 65,535 rows, 4.8MB on JDK 17 - time (lower is better)
 ──────────────────────────────────────────────────────────────
-Pravaah   ■■■■■■                          43ms
-EasyExcel ■■■■■■■■■■■■                    83ms
-POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    183ms
+Pravaah   ■■■■■■                          46ms
+EasyExcel ■■■■■■■■■■■■                    77ms
+POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    176ms
 ```
 
 #### JDK 8
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 19 ms | 50 ms | 21 ms |
-| XLSX | 1.5 MB | 35,808 | 96 ms | 408 ms | 133 ms |
-| XLS | 4.8 MB | 65,535 | 52 ms | 160 ms | 67 ms |
+| XLSX | 244 KB | 1,000 | 18 ms | 50 ms | 18 ms |
+| XLSX | 1.5 MB | 35,808 | 100 ms | 412 ms | 133 ms |
+| XLS | 4.8 MB | 65,535 | 50 ms | 154 ms | 66 ms |
 
 #### JDK 11
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 26 ms | 81 ms | 26 ms |
-| XLSX | 1.5 MB | 35,808 | 120 ms | 554 ms | 147 ms |
-| XLS | 4.8 MB | 65,535 | 46 ms | 210 ms | 90 ms |
+| XLSX | 244 KB | 1,000 | 27 ms | 84 ms | 23 ms |
+| XLSX | 1.5 MB | 35,808 | 120 ms | 551 ms | 145 ms |
+| XLS | 4.8 MB | 65,535 | 52 ms | 219 ms | 91 ms |
 
 #### JDK 17
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 20 ms | 63 ms | 21 ms |
-| XLSX | 1.5 MB | 35,808 | 96 ms | 513 ms | 142 ms |
-| XLS | 4.8 MB | 65,535 | 43 ms | 183 ms | 83 ms |
+| XLSX | 244 KB | 1,000 | 22 ms | 69 ms | 21 ms |
+| XLSX | 1.5 MB | 35,808 | 91 ms | 510 ms | 145 ms |
+| XLS | 4.8 MB | 65,535 | 46 ms | 176 ms | 77 ms |
+
+### Write
+
+Write workloads use 100,000 generated rows x 10 columns. CSV is compared with CSV writer libraries; XLSX is compared with Apache POI streaming SXSSF and EasyExcel. Pravaah favors write throughput for XLSX ZIP compression, so the XLSX output is larger than EasyExcel's but writes faster in this workload. Legacy `.xls` is read-only in Pravaah, so there is no `.xls` write benchmark.
+
+```text
+CSV write: 100,000 rows, 10 columns on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+uniVocity   ■■■■■■■■■■■■■■■■■■■■■■■       25ms
+Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■■■■    29ms
+Pravaah     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■  33ms
+OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 34ms
+Commons CSV ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 97ms
+
+XLSX write: 100,000 rows, 10 columns on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+Pravaah   ■■■■■■■                         127ms
+EasyExcel ■■■■■■■■■■■■■■■■■■■■            346ms
+POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 583ms
+```
+
+#### JDK 8
+
+| Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 100,000 x 10 | 11.3 MB | 36 ms | 33 ms | 109 ms | 37 ms | 31 ms | - | - |
+| XLSX | 100,000 x 10 | 6.4 MB | 247 ms | - | - | - | - | 680 ms | 326 ms |
+
+#### JDK 11
+
+| Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 100,000 x 10 | 11.3 MB | 34 ms | 29 ms | 64 ms | 37 ms | 31 ms | - | - |
+| XLSX | 100,000 x 10 | 6.4 MB | 155 ms | - | - | - | - | 663 ms | 323 ms |
+
+#### JDK 17
+
+| Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 100,000 x 10 | 11.3 MB | 33 ms | 25 ms | 97 ms | 34 ms | 29 ms | - | - |
+| XLSX | 100,000 x 10 | 6.4 MB | 127 ms | - | - | - | - | 583 ms | 346 ms |
 
 ### Format Coverage
 
