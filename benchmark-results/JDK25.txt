@@ -1,0 +1,83 @@
+============================================================================
+  PRAVAAH-JAVA BENCHMARK SUITE (ALL COMPETITORS)
+  JVM: 25.0.1.0.101 | OpenJDK 64-Bit Server VM | Cores: 16 | MaxMem: 6.00 GB
+============================================================================
+
++--------------------------------------------------------------------------+
+| BENCHMARK 1: CSV PARSING SPEED — ALL COMPETITORS                         |
++--------------------------------------------------------------------------+
+
+--- 10K rows (406.9 KB) ---
+  Pravaah                               3 ms
+  BufferedReader + split                1 ms
+  Apache Commons CSV                    2 ms
+  uniVocity-parsers                     2 ms
+  OpenCSV                               1 ms
+  Jackson CSV                           2 ms
+
+--- 100K rows (4.2 MB) ---
+  Pravaah                              26 ms
+  BufferedReader + split               12 ms
+  Apache Commons CSV                   24 ms
+  uniVocity-parsers                    25 ms
+  OpenCSV                              20 ms
+  Jackson CSV                          19 ms
+
+--- 1M rows (43.6 MB) ---
+  Pravaah                             193 ms
+  BufferedReader + split              114 ms
+  Apache Commons CSV                  236 ms
+  uniVocity-parsers                   141 ms
+  OpenCSV                             155 ms
+  Jackson CSV                         156 ms
+
++--------------------------------------------------------------------------+
+| BENCHMARK 2: VALIDATION PIPELINE — parse + validate + coerce + errors    |
++--------------------------------------------------------------------------+
+
+--- 100K rows with ~10% bad data ---
+  Pravaah                              67 ms  valid: 90027  errors: 29919  LOC: 10
+  DIY (BR + regex + try/catch)         26 ms  valid: 90027  errors: 29919  LOC: 120+
+
+  Note: Other CSV libs don't include validation — you'd write the same
+  120+ lines of DIY validation on top of ANY of them.
+
++--------------------------------------------------------------------------+
+| BENCHMARK 3: LARGE FILE STREAMING — 1M rows, all competitors             |
++--------------------------------------------------------------------------+
+
+--- 1M rows (43.6 MB) ---
+
+  Library                              Time      Throughput    Peak Mem
+  ----------------------------------------------------------------------
+  Pravaah                             195 ms     5128205 r/s    691.3 MB
+  BufferedReader+split                114 ms     8771930 r/s     34.4 MB
+  Apache Commons CSV                  235 ms     4255319 r/s     94.0 MB
+  uniVocity-parsers                   142 ms     7042254 r/s    386.4 MB
+  OpenCSV                             163 ms     6134969 r/s     62.8 MB
+  Jackson CSV                         162 ms     6172840 r/s     90.0 MB
+
+  Pravaah (parse+validate all)        523 ms     1912046 r/s  (full schema)
+
++--------------------------------------------------------------------------+
+| CODE COMPLEXITY: Lines of Code to parse + validate + collect errors      |
++--------------------------------------------------------------------------+
+
+  Task: CSV -> validate email/number/bool -> collect errors + valid rows
+
+  +---------------------------------+-------+
+  | Approach                        |  LOC  |
+  +---------------------------------+-------+
+  | Pravaah                         |    10 |
+  | uniVocity + DIY validation      |   60+ |
+  | OpenCSV + DIY validation        |   70+ |
+  | Apache Commons CSV + DIY valid  |   85+ |
+  | Jackson CSV + DIY validation    |   90+ |
+  | BufferedReader + split + DIY    |  120+ |
+  | Full DIY (RFC CSV + validation) |  300+ |
+  +---------------------------------+-------+
+
+
+============================================================================
+  BENCHMARK COMPLETE
+============================================================================
