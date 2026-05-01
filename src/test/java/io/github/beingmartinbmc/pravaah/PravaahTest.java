@@ -1,6 +1,7 @@
 package io.github.beingmartinbmc.pravaah;
 
 import io.github.beingmartinbmc.pravaah.csv.CsvReader;
+import io.github.beingmartinbmc.pravaah.csv.CsvWriter;
 import io.github.beingmartinbmc.pravaah.diff.DiffEngine;
 import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
@@ -17,6 +18,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.*;
 import java.util.function.Function;
 
@@ -27,7 +30,176 @@ class PravaahTest {
     @TempDir
     Path tempDir;
 
-    // --- Pipeline tests ---
+    // ====================== Row ======================
+
+    @Test
+    void rowOfSinglePair() {
+        Row r = Row.of("k1", "v1");
+        assertEquals("v1", r.get("k1"));
+        assertEquals(1, r.size());
+    }
+
+    @Test
+    void rowOfTwoPairs() {
+        Row r = Row.of("a", 1, "b", 2);
+        assertEquals(1, r.get("a"));
+        assertEquals(2, r.get("b"));
+    }
+
+    @Test
+    void rowOfThreePairs() {
+        Row r = Row.of("a", 1, "b", 2, "c", 3);
+        assertEquals(3, r.size());
+    }
+
+    @Test
+    void rowOfVarargsEvenCount() {
+        Row r = Row.of("a", 1, "b", 2, "c", 3, "d", 4);
+        assertEquals(4, r.size());
+        assertEquals(4, r.get("d"));
+    }
+
+    @Test
+    void rowOfVarargsOddCountThrows() {
+        assertThrows(IllegalArgumentException.class, () -> Row.of("a", 1, "b"));
+    }
+
+    @Test
+    void rowCopyIsIndependent() {
+        Row original = Row.of("a", 1);
+        Row copy = original.copy();
+        copy.put("b", 2);
+        assertFalse(original.containsKey("b"));
+    }
+
+    @Test
+    void rowGetStringNull() {
+        Row r = Row.of("a", null);
+        assertNull(r.getString("a"));
+        assertNull(r.getString("missing"));
+    }
+
+    @Test
+    void rowGetStringConverts() {
+        Row r = Row.of("num", 42, "str", "hello");
+        assertEquals("42", r.getString("num"));
+        assertEquals("hello", r.getString("str"));
+    }
+
+    @Test
+    void rowGetNumberFromNumber() {
+        Row r = Row.of("n", 42);
+        assertEquals(42, r.getNumber("n").intValue());
+    }
+
+    @Test
+    void rowGetNumberFromString() {
+        Row r = Row.of("n", "3.14");
+        assertEquals(3.14, r.getNumber("n").doubleValue(), 0.001);
+    }
+
+    @Test
+    void rowGetNumberFromBadString() {
+        Row r = Row.of("n", "abc");
+        assertNull(r.getNumber("n"));
+    }
+
+    @Test
+    void rowGetNumberFromNull() {
+        Row r = Row.of("n", null);
+        assertNull(r.getNumber("n"));
+    }
+
+    @Test
+    void rowGetNumberFromBoolean() {
+        Row r = Row.of("n", true);
+        assertNull(r.getNumber("n"));
+    }
+
+    @Test
+    void rowGetBooleanFromBoolean() {
+        Row r = Row.of("b", true);
+        assertTrue(r.getBoolean("b"));
+    }
+
+    @Test
+    void rowGetBooleanTruthyStrings() {
+        for (String val : new String[]{"true", "TRUE", "1", "yes", "YES", "y", "Y"}) {
+            Row r = Row.of("b", val);
+            assertTrue(r.getBoolean("b"), "Expected true for: " + val);
+        }
+    }
+
+    @Test
+    void rowGetBooleanFalsyStrings() {
+        for (String val : new String[]{"false", "FALSE", "0", "no", "NO", "n", "N"}) {
+            Row r = Row.of("b", val);
+            assertFalse(r.getBoolean("b"), "Expected false for: " + val);
+        }
+    }
+
+    @Test
+    void rowGetBooleanFromNull() {
+        Row r = Row.of("b", null);
+        assertNull(r.getBoolean("b"));
+    }
+
+    @Test
+    void rowGetBooleanFromUnrecognized() {
+        Row r = Row.of("b", "maybe");
+        assertNull(r.getBoolean("b"));
+    }
+
+    @Test
+    void rowGetBooleanFromNumber() {
+        Row r = Row.of("b", 42);
+        assertNull(r.getBoolean("b"));
+    }
+
+    @Test
+    void rowDefaultConstructor() {
+        Row r = new Row();
+        assertTrue(r.isEmpty());
+    }
+
+    @Test
+    void rowMapConstructor() {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("x", 1);
+        map.put("y", 2);
+        Row r = new Row(map);
+        assertEquals(1, r.get("x"));
+        assertEquals(2, r.get("y"));
+    }
+
+    // ====================== PravaahFormat ======================
+
+    @Test
+    void formatFromCsvExtension() {
+        assertEquals(PravaahFormat.CSV, PravaahFormat.fromExtension("data.csv"));
+    }
+
+    @Test
+    void formatFromJsonExtension() {
+        assertEquals(PravaahFormat.JSON, PravaahFormat.fromExtension("data.json"));
+    }
+
+    @Test
+    void formatFromXlsxExtension() {
+        assertEquals(PravaahFormat.XLSX, PravaahFormat.fromExtension("data.xlsx"));
+    }
+
+    @Test
+    void formatFromNull() {
+        assertEquals(PravaahFormat.XLSX, PravaahFormat.fromExtension(null));
+    }
+
+    @Test
+    void formatFromUnknownExtension() {
+        assertEquals(PravaahFormat.XLSX, PravaahFormat.fromExtension("data.txt"));
+    }
+
+    // ====================== Pipeline tests ======================
 
     @Test
     void mapFilterCollect() throws Exception {
@@ -99,7 +271,7 @@ class PravaahTest {
         assertTrue(reportText.contains("invalid_type"));
     }
 
-    // --- CSV tests ---
+    // ====================== CSV tests ======================
 
     @Test
     void csvRoundTrip() throws Exception {
@@ -225,7 +397,73 @@ class PravaahTest {
         assertEquals(10, rows.get(0).get("_2"));
     }
 
-    // --- XLSX tests ---
+    @Test
+    void csvWriteSpecialCharacters() throws Exception {
+        String file = tempDir.resolve("special.csv").toString();
+        List<Row> rows = Collections.singletonList(
+                Row.of("name", "O'Brien, Jr.", "note", "contains \"quotes\"", "multi", "line\none"));
+        Pravaah.write(rows, file, WriteOptions.defaults().format(PravaahFormat.CSV));
+
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains("\"O'Brien, Jr.\""));
+        assertTrue(content.contains("\"\"quotes\"\""));
+    }
+
+    @Test
+    void csvWriteCustomDelimiter() throws Exception {
+        String file = tempDir.resolve("semi.csv").toString();
+        List<Row> rows = Collections.singletonList(Row.of("a", 1, "b", 2));
+        CsvWriter.write(rows, file, WriteOptions.defaults().delimiter(";"));
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains("a;b"));
+        assertTrue(content.contains("1;2"));
+    }
+
+    @Test
+    void csvWriteExplicitHeaders() throws Exception {
+        String file = tempDir.resolve("explicit.csv").toString();
+        List<Row> rows = Collections.singletonList(Row.of("a", 1, "b", 2, "c", 3));
+        CsvWriter.write(rows, file, WriteOptions.defaults().headers(Arrays.asList("c", "a")));
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.startsWith("c,a"));
+    }
+
+    @Test
+    void csvWriteNullValues() throws Exception {
+        String file = tempDir.resolve("nulls.csv").toString();
+        Row row = Row.of("a", 1);
+        row.put("b", null);
+        CsvWriter.write(Collections.singletonList(row), file, WriteOptions.defaults());
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains(","));
+    }
+
+    @Test
+    void csvInferValueEdgeCases() {
+        assertNull(CsvReader.inferValue(null));
+        assertNull(CsvReader.inferValue(""));
+        assertEquals(42, CsvReader.inferValue("42"));
+        assertEquals(3.14, CsvReader.inferValue("3.14"));
+        assertEquals(false, CsvReader.inferValue("FALSE"));
+        assertEquals(true, CsvReader.inferValue("True"));
+        assertEquals("Ada", CsvReader.inferValue("Ada"));
+    }
+
+    @Test
+    void csvDrainCountHeaderless() throws Exception {
+        byte[] csv = "1,2\n3,4\n".getBytes(StandardCharsets.UTF_8);
+        int count = CsvReader.drainCount(csv, ReadOptions.defaults().headers(false));
+        assertEquals(2, count);
+    }
+
+    @Test
+    void csvDrainQuotedEndingWithDelimiter() throws Exception {
+        byte[] csv = "a,b\n\"x\",y\n".getBytes(StandardCharsets.UTF_8);
+        int count = CsvReader.drainCount(csv, ReadOptions.defaults());
+        assertEquals(1, count);
+    }
+
+    // ====================== XLSX tests ======================
 
     @Test
     void xlsxRoundTrip() throws Exception {
@@ -294,7 +532,34 @@ class PravaahTest {
         }
     }
 
-    // --- Schema tests ---
+    @Test
+    void xlsxBySheetIndex() throws Exception {
+        String file = tempDir.resolve("indexed.xlsx").toString();
+        Workbook wb = new Workbook(Arrays.asList(
+                new Worksheet("Sheet1", Collections.singletonList(Row.of("v", "first"))),
+                new Worksheet("Sheet2", Collections.singletonList(Row.of("v", "second")))
+        ));
+        XlsxWriter.writeWorkbook(wb, file);
+
+        List<Row> rows = Pravaah.read(file, ReadOptions.defaults().sheetIndex(1)).collect();
+        assertEquals(1, rows.size());
+        assertEquals("second", rows.get(0).get("v"));
+    }
+
+    @Test
+    void xlsxMultipleRows() throws Exception {
+        String file = tempDir.resolve("multi_rows.xlsx").toString();
+        List<Row> data = Arrays.asList(
+                Row.of("id", 1, "name", "Ada"),
+                Row.of("id", 2, "name", "Grace"),
+                Row.of("id", 3, "name", "Linus")
+        );
+        Pravaah.write(data, file, WriteOptions.defaults().format(PravaahFormat.XLSX));
+        List<Row> rows = Pravaah.read(file, ReadOptions.defaults().format(PravaahFormat.XLSX)).collect();
+        assertEquals(3, rows.size());
+    }
+
+    // ====================== Schema tests ======================
 
     @Test
     void schemaCleaningAndValidation() {
@@ -382,7 +647,259 @@ class PravaahTest {
         assertEquals(2, result.getIssues().size());
     }
 
-    // --- Formula tests ---
+    @Test
+    void schemaDateCoercion() {
+        SchemaDefinition def = SchemaDefinition.of("d", Schema.date());
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", "2024-06-15")),
+                def, ValidationMode.COLLECT, null);
+        assertEquals(1, result.getRows().size());
+        assertEquals(LocalDate.of(2024, 6, 15), result.getRows().get(0).get("d"));
+    }
+
+    @Test
+    void schemaDateFromInstantString() {
+        SchemaDefinition def = SchemaDefinition.of("d", Schema.date());
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", "2024-06-15T10:30:00Z")),
+                def, ValidationMode.COLLECT, null);
+        assertEquals(1, result.getRows().size());
+        assertTrue(result.getRows().get(0).get("d") instanceof Instant);
+    }
+
+    @Test
+    void schemaDateInvalidString() {
+        SchemaDefinition def = SchemaDefinition.of("d", Schema.date());
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", "not-a-date")),
+                def, ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void schemaDateNativeObjects() {
+        LocalDate ld = LocalDate.of(2024, 1, 1);
+        Instant inst = Instant.now();
+        SchemaDefinition def = SchemaDefinition.of("d", Schema.date());
+
+        ProcessResult r1 = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", ld)), def, ValidationMode.COLLECT, null);
+        assertEquals(ld, r1.getRows().get(0).get("d"));
+
+        ProcessResult r2 = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", inst)), def, ValidationMode.COLLECT, null);
+        assertEquals(inst, r2.getRows().get(0).get("d"));
+    }
+
+    @Test
+    void schemaDateCoerceFalseWithString() {
+        SchemaDefinition def = SchemaDefinition.of("d", Schema.date().coerce(false));
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("d", "2024-01-01")),
+                def, ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void schemaPhoneTooShort() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("p", "123")),
+                SchemaDefinition.of("p", Schema.phone()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void schemaMissingRequiredField() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("other", "value")),
+                SchemaDefinition.of("id", Schema.number()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertTrue(result.getIssues().get(0).getCode().equals("missing_column"));
+    }
+
+    @Test
+    void schemaMissingFieldWithEmptyString() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("id", "")),
+                SchemaDefinition.of("id", Schema.number()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals("missing_column", result.getIssues().get(0).getCode());
+    }
+
+    @Test
+    void schemaCustomValidateFunction() {
+        FieldDefinition fd = Schema.number().validate((value, row) -> {
+            double d = ((Number) value).doubleValue();
+            return d > 100 ? "value too large" : null;
+        });
+
+        ProcessResult r1 = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("n", "50")),
+                SchemaDefinition.of("n", fd), ValidationMode.COLLECT, null);
+        assertEquals(1, r1.getRows().size());
+        assertTrue(r1.getIssues().isEmpty());
+
+        ProcessResult r2 = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("n", "200")),
+                SchemaDefinition.of("n", fd), ValidationMode.COLLECT, null);
+        assertEquals(0, r2.getRows().size());
+        assertEquals("invalid_value", r2.getIssues().get(0).getCode());
+    }
+
+    @Test
+    void schemaAnyKind() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("a", "anything", "b", 42)),
+                new SchemaDefinition().field("a", Schema.any()).field("b", Schema.any()),
+                ValidationMode.COLLECT, null);
+        assertEquals(1, result.getRows().size());
+        assertEquals("anything", result.getRows().get(0).get("a"));
+        assertEquals(42, result.getRows().get(0).get("b"));
+    }
+
+    @Test
+    void schemaStringKindCoercion() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("s", 42)),
+                SchemaDefinition.of("s", Schema.string()),
+                ValidationMode.COLLECT, null);
+        assertEquals("42", result.getRows().get(0).get("s"));
+    }
+
+    @Test
+    void schemaNumberAlreadyNumber() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("n", 42)),
+                SchemaDefinition.of("n", Schema.number()),
+                ValidationMode.COLLECT, null);
+        assertEquals(42.0, result.getRows().get(0).get("n"));
+    }
+
+    @Test
+    void schemaBooleanAlreadyBoolean() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("b", true)),
+                SchemaDefinition.of("b", Schema.bool()),
+                ValidationMode.COLLECT, null);
+        assertEquals(true, result.getRows().get(0).get("b"));
+    }
+
+    @Test
+    void schemaEmailInvalid() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("e", "not-an-email")),
+                SchemaDefinition.of("e", Schema.email()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void schemaBooleanUnrecognized() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("b", "maybe")),
+                SchemaDefinition.of("b", Schema.bool()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void schemaNumberNaN() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("n", "NaN")),
+                SchemaDefinition.of("n", Schema.number()),
+                ValidationMode.COLLECT, null);
+        assertEquals(0, result.getRows().size());
+    }
+
+    @Test
+    void schemaOptionalWithOptionalMethod() {
+        FieldDefinition fd = Schema.number(true);
+        assertTrue(fd.isOptional());
+    }
+
+    @Test
+    void schemaCleanRowNullOptions() {
+        Row row = Row.of("a", "val");
+        Row result = SchemaValidator.cleanRow(row, null);
+        assertSame(row, result);
+    }
+
+    @Test
+    void schemaNormalizeWhitespace() {
+        List<Row> input = Collections.singletonList(Row.of("name", "  John   Doe  "));
+        List<Row> cleaned = SchemaValidator.cleanRows(input,
+                CleaningOptions.defaults().trim(true).normalizeWhitespace(true));
+        assertEquals("John Doe", cleaned.get(0).get("name"));
+    }
+
+    @Test
+    void schemaFuzzyHeadersAlreadyPresent() {
+        Row row = Row.of("email", "ada@example.com", "Email Address", "old@example.com");
+        Row result = SchemaValidator.applyFuzzyHeaders(row,
+                Collections.singletonMap("email", Collections.singletonList("email address")));
+        assertEquals("ada@example.com", result.get("email"));
+    }
+
+    @Test
+    void schemaFuzzyHeadersEmptyAliases() {
+        Row row = Row.of("a", 1);
+        Row result = SchemaValidator.applyFuzzyHeaders(row, null);
+        assertSame(row, result);
+        Row result2 = SchemaValidator.applyFuzzyHeaders(row, new LinkedHashMap<>());
+        assertSame(row, result2);
+    }
+
+    @Test
+    void schemaIsDuplicateNullKey() {
+        Set<String> seen = new HashSet<>();
+        assertFalse(SchemaValidator.isDuplicate(Row.of("a", 1), null, seen));
+    }
+
+    @Test
+    void schemaValidateRowsWithCleaning() {
+        ProcessResult result = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("id", " 42 ")),
+                SchemaDefinition.of("id", Schema.number()),
+                ValidationMode.COLLECT,
+                CleaningOptions.defaults().trim(true));
+        assertEquals(1, result.getRows().size());
+        assertEquals(42.0, result.getRows().get(0).get("id"));
+    }
+
+    @Test
+    void schemaCleanRowsNoDedupeKey() {
+        List<Row> input = Arrays.asList(Row.of("a", 1), Row.of("a", 1));
+        List<Row> cleaned = SchemaValidator.cleanRows(input, CleaningOptions.defaults());
+        assertEquals(2, cleaned.size());
+    }
+
+    @Test
+    void schemaCleanRowsDeduplicates() {
+        List<Row> input = Arrays.asList(
+                Row.of("id", "1", "v", "a"),
+                Row.of("id", "1", "v", "b"),
+                Row.of("id", "2", "v", "c"));
+        List<Row> cleaned = SchemaValidator.cleanRows(input, CleaningOptions.defaults().dedupeKey("id"));
+        assertEquals(2, cleaned.size());
+    }
+
+    @Test
+    void schemaCleanNonStringValues() {
+        List<Row> input = Collections.singletonList(Row.of("num", 42, "bool", true));
+        List<Row> cleaned = SchemaValidator.cleanRows(input, CleaningOptions.defaults().trim(true));
+        assertEquals(42, cleaned.get(0).get("num"));
+        assertEquals(true, cleaned.get(0).get("bool"));
+    }
+
+    // ====================== Formula tests ======================
 
     @Test
     void formulaEvaluation() {
@@ -420,7 +937,97 @@ class PravaahTest {
         assertThrows(IllegalArgumentException.class, () -> engine.evaluate("MISSING(1)"));
     }
 
-    // --- Query tests ---
+    @Test
+    void formulaConcat() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals("helloworld", engine.evaluate("CONCAT(\"hello\",\"world\")"));
+    }
+
+    @Test
+    void formulaConcatWithRow() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals("Ada10", engine.evaluate("CONCAT(name,score)", Row.of("name", "Ada", "score", 10)));
+    }
+
+    @Test
+    void formulaArithmeticOperations() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals(5.0, engine.evaluate("10 / 2", new Row()));
+        assertEquals(7.0, engine.evaluate("3 + 4", new Row()));
+        assertEquals(6.0, engine.evaluate("2 * 3", new Row()));
+        assertEquals(1.0, engine.evaluate("5 - 4", new Row()));
+    }
+
+    @Test
+    void formulaArithmeticNegative() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals(-3.0, engine.evaluate("-3", new Row()));
+    }
+
+    @Test
+    void formulaArithmeticParentheses() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals(14.0, engine.evaluate("(3 + 4) * 2", new Row()));
+    }
+
+    @Test
+    void formulaStaticNoRow() {
+        Object result = FormulaEngine.evaluateFormula("SUM(1,2,3)");
+        assertEquals(6.0, result);
+    }
+
+    @Test
+    void formulaLeadingEquals() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals(6.0, engine.evaluate("=SUM(1,2,3)"));
+    }
+
+    @Test
+    void formulaIfTruthyEdgeCases() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals("yes", engine.evaluate("IF(1,\"yes\",\"no\")"));
+        assertEquals("no", engine.evaluate("IF(0,\"yes\",\"no\")"));
+        assertEquals("yes", engine.evaluate("IF(\"nonempty\",\"yes\",\"no\")"));
+    }
+
+    @Test
+    void formulaAverageEmpty() {
+        FormulaEngine engine = new FormulaEngine();
+        assertEquals(0.0, engine.evaluate("AVERAGE(\"x\")"));
+    }
+
+    @Test
+    void formulaNullCustomFunctions() {
+        FormulaEngine engine = new FormulaEngine(null);
+        assertEquals(6.0, engine.evaluate("SUM(1,2,3)"));
+    }
+
+    @Test
+    void formulaRegister() {
+        FormulaEngine engine = new FormulaEngine();
+        engine.register("TRIPLE", (args, row) -> ((Number) args.get(0)).doubleValue() * 3);
+        assertEquals(15.0, engine.evaluate("TRIPLE(5)"));
+    }
+
+    @Test
+    void formulaNestedFunctionCalls() {
+        FormulaEngine engine = new FormulaEngine();
+        engine.register("ADD", (args, row) -> {
+            double a = ((Number) args.get(0)).doubleValue();
+            double b = ((Number) args.get(1)).doubleValue();
+            return a + b;
+        });
+        assertEquals(6.0, engine.evaluate("SUM(3,3)"));
+    }
+
+    @Test
+    void formulaExpressionFallback() {
+        FormulaEngine engine = new FormulaEngine();
+        Object result = engine.evaluate("hello", new Row());
+        assertEquals("hello", result);
+    }
+
+    // ====================== Query tests ======================
 
     @Test
     void queryBasic() {
@@ -482,7 +1089,106 @@ class PravaahTest {
         assertEquals(true, joined.get(0).get("right"));
     }
 
-    // --- Diff tests ---
+    @Test
+    void queryEqualsOperator() {
+        List<Row> rows = Arrays.asList(
+                Row.of("name", "Ada", "score", 10),
+                Row.of("name", "Grace", "score", 3)
+        );
+        List<Row> result = QueryEngine.query(rows, "SELECT * WHERE score = 10");
+        assertEquals(1, result.size());
+        assertEquals("Ada", result.get(0).get("name"));
+    }
+
+    @Test
+    void queryLessOrEqual() {
+        List<Row> rows = Arrays.asList(
+                Row.of("score", 10), Row.of("score", 5), Row.of("score", 3));
+        assertEquals(2, QueryEngine.query(rows, "SELECT * WHERE score <= 5").size());
+    }
+
+    @Test
+    void queryAscOrder() {
+        List<Row> rows = Arrays.asList(
+                Row.of("name", "Grace", "score", 3),
+                Row.of("name", "Ada", "score", 10)
+        );
+        List<Row> result = QueryEngine.query(rows, "SELECT * ORDER BY score ASC");
+        assertEquals("Grace", result.get(0).get("name"));
+    }
+
+    @Test
+    void querySelectAll() {
+        List<Row> rows = Arrays.asList(Row.of("a", 1, "b", 2));
+        List<Row> result = QueryEngine.query(rows, "SELECT *");
+        assertEquals(1, result.size());
+        assertEquals(1, result.get(0).get("a"));
+        assertEquals(2, result.get(0).get("b"));
+    }
+
+    @Test
+    void queryLimitWithoutOrderBy() {
+        List<Row> rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) rows.add(Row.of("id", i));
+        List<Row> result = QueryEngine.query(rows, "SELECT * LIMIT 3");
+        assertEquals(3, result.size());
+    }
+
+    @Test
+    void queryProjectColumns() {
+        List<Row> rows = Collections.singletonList(Row.of("a", 1, "b", 2, "c", 3));
+        List<Row> result = QueryEngine.query(rows, "SELECT a, c");
+        assertEquals(1, result.get(0).get("a"));
+        assertNull(result.get(0).get("b"));
+        assertEquals(3, result.get(0).get("c"));
+    }
+
+    @Test
+    void queryOrderByString() {
+        List<Row> rows = Arrays.asList(
+                Row.of("name", "Charlie"),
+                Row.of("name", "Alice"),
+                Row.of("name", "Bob")
+        );
+        List<Row> result = QueryEngine.query(rows, "SELECT * ORDER BY name ASC");
+        assertEquals("Alice", result.get(0).get("name"));
+    }
+
+    @Test
+    void queryContainsWithNullValue() {
+        List<Row> rows = Arrays.asList(Row.of("name", "Ada"), Row.of("x", 1));
+        List<Row> result = QueryEngine.query(rows, "SELECT * WHERE name contains 'Ad'");
+        assertEquals(1, result.size());
+    }
+
+    @Test
+    void queryWhereNonNumericComparison() {
+        List<Row> rows = Collections.singletonList(Row.of("name", "Ada"));
+        List<Row> result = QueryEngine.query(rows, "SELECT * WHERE name > 5");
+        assertEquals(0, result.size());
+    }
+
+    @Test
+    void joinRowsNoMatch() {
+        List<Row> left = Collections.singletonList(Row.of("id", 1));
+        List<Row> right = Collections.singletonList(Row.of("id", 2));
+        List<Row> joined = QueryEngine.joinRows(left, right, "id");
+        assertEquals(0, joined.size());
+    }
+
+    @Test
+    void createIndexSingleKey() {
+        List<Row> rows = Arrays.asList(
+                Row.of("cat", "a", "v", 1),
+                Row.of("cat", "a", "v", 2),
+                Row.of("cat", "b", "v", 3)
+        );
+        Map<String, List<Row>> index = QueryEngine.createIndex(rows, "cat");
+        assertEquals(2, index.get("a").size());
+        assertEquals(1, index.get("b").size());
+    }
+
+    // ====================== Diff tests ======================
 
     @Test
     void diffBasic() {
@@ -512,7 +1218,75 @@ class PravaahTest {
         assertTrue(text.contains("added"));
     }
 
-    // --- Plugin tests ---
+    @Test
+    void diffUnchanged() {
+        List<Row> rows = Arrays.asList(Row.of("id", 1, "v", "same"), Row.of("id", 2, "v", "same2"));
+        DiffEngine.DiffResult result = DiffEngine.diff(rows, rows, "id");
+        assertEquals(0, result.getAdded().size());
+        assertEquals(0, result.getRemoved().size());
+        assertEquals(0, result.getChanged().size());
+        assertEquals(2, result.getUnchanged());
+    }
+
+    @Test
+    void diffAdded() {
+        List<Row> old = Collections.emptyList();
+        List<Row> newRows = Arrays.asList(Row.of("id", 1), Row.of("id", 2));
+        DiffEngine.DiffResult result = DiffEngine.diff(old, newRows, "id");
+        assertEquals(2, result.getAdded().size());
+        assertEquals(0, result.getRemoved().size());
+    }
+
+    @Test
+    void diffRemoved() {
+        List<Row> old = Arrays.asList(Row.of("id", 1), Row.of("id", 2));
+        List<Row> newRows = Collections.emptyList();
+        DiffEngine.DiffResult result = DiffEngine.diff(old, newRows, "id");
+        assertEquals(0, result.getAdded().size());
+        assertEquals(2, result.getRemoved().size());
+    }
+
+    @Test
+    void diffChangedColumnDetails() {
+        List<Row> old = Collections.singletonList(Row.of("id", 1, "v", "old", "x", "same"));
+        List<Row> newRows = Collections.singletonList(Row.of("id", 1, "v", "new", "x", "same"));
+        DiffEngine.DiffResult result = DiffEngine.diff(old, newRows, "id");
+        assertEquals(1, result.getChanged().size());
+        DiffEngine.RowChange change = result.getChanged().get(0);
+        assertTrue(change.getChangedColumns().contains("v"));
+        assertFalse(change.getChangedColumns().contains("x"));
+        assertNotNull(change.getBefore());
+        assertNotNull(change.getAfter());
+        assertNotNull(change.getKey());
+    }
+
+    @Test
+    void diffMultiKey() {
+        List<Row> old = Collections.singletonList(Row.of("a", 1, "b", 2, "v", "old"));
+        List<Row> newRows = Collections.singletonList(Row.of("a", 1, "b", 2, "v", "new"));
+        DiffEngine.DiffResult result = DiffEngine.diff(old, newRows, "a", "b");
+        assertEquals(1, result.getChanged().size());
+    }
+
+    @Test
+    void diffConvenienceMethod() {
+        List<Row> old = Collections.singletonList(Row.of("id", 1, "v", 1));
+        List<Row> newRows = Collections.singletonList(Row.of("id", 1, "v", 2));
+        DiffEngine.DiffResult result = Pravaah.diff(old, newRows, "id");
+        assertEquals(1, result.getChanged().size());
+    }
+
+    @Test
+    void diffReportEmptyResult() throws Exception {
+        List<Row> rows = Collections.singletonList(Row.of("id", 1, "v", 1));
+        DiffEngine.DiffResult result = DiffEngine.diff(rows, rows, "id");
+        String report = tempDir.resolve("empty_diff.csv").toString();
+        DiffEngine.writeDiffReport(result, report);
+        String text = new String(Files.readAllBytes(Paths.get(report)));
+        assertTrue(text.contains("type,key,changedColumns,before,after"));
+    }
+
+    // ====================== Plugin tests ======================
 
     @Test
     void pluginRegistry() {
@@ -537,7 +1311,43 @@ class PravaahTest {
         assertEquals(1, registry.validateRows(Arrays.asList(Row.of("valid", true), Row.of("valid", false))).size());
     }
 
-    // --- Perf tests ---
+    @Test
+    void pluginEmptyFormulasAndValidators() {
+        PluginRegistry registry = new PluginRegistry();
+        registry.use(new PravaahPlugin("minimal"));
+        assertEquals(1, registry.list().size());
+        assertTrue(registry.formulas().isEmpty());
+        assertTrue(registry.validators().isEmpty());
+        assertTrue(registry.validate(Row.of("a", 1)).isEmpty());
+    }
+
+    @Test
+    void pluginMultiplePlugins() {
+        PluginRegistry registry = new PluginRegistry();
+
+        Map<String, Function<List<Object>, Object>> f1 = new LinkedHashMap<>();
+        f1.put("FN1", args -> 1);
+        Map<String, Function<List<Object>, Object>> f2 = new LinkedHashMap<>();
+        f2.put("FN2", args -> 2);
+
+        registry.use(new PravaahPlugin("p1").formulas(f1));
+        registry.use(new PravaahPlugin("p2").formulas(f2));
+
+        assertEquals(2, registry.list().size());
+        assertEquals(2, registry.formulas().size());
+        assertTrue(registry.formulas().containsKey("FN1"));
+        assertTrue(registry.formulas().containsKey("FN2"));
+    }
+
+    @Test
+    void pluginGetters() {
+        PravaahPlugin plugin = new PravaahPlugin("test");
+        assertEquals("test", plugin.getName());
+        assertNull(plugin.getFormulas());
+        assertNull(plugin.getValidators());
+    }
+
+    // ====================== Perf tests ======================
 
     @Test
     void perfHelpers() {
@@ -575,7 +1385,127 @@ class PravaahTest {
         assertEquals(3, merged.getWarnings());
     }
 
-    // --- Pipeline advanced tests ---
+    @Test
+    void perfMergeNullPeakMemory() {
+        ProcessStats a = PerfUtils.createStats();
+        a.setPeakMemoryBytes(null);
+        ProcessStats b = PerfUtils.createStats();
+        b.setPeakMemoryBytes(null);
+        ProcessStats merged = PerfUtils.mergeStats(a, b);
+        assertEquals(0L, merged.getPeakMemoryBytes());
+    }
+
+    @Test
+    void perfFormatBytesEdgeCases() {
+        assertEquals("0B", PerfUtils.formatBytes(0));
+        assertEquals("1023B", PerfUtils.formatBytes(1023));
+        assertEquals("1.0KB", PerfUtils.formatBytes(1024));
+    }
+
+    // ====================== ProcessStats ======================
+
+    @Test
+    void processStatsIncrements() {
+        ProcessStats stats = new ProcessStats();
+        assertEquals(0, stats.getRowsProcessed());
+        stats.incrementRowsProcessed();
+        assertEquals(1, stats.getRowsProcessed());
+        stats.incrementRowsWritten();
+        assertEquals(1, stats.getRowsWritten());
+    }
+
+    @Test
+    void processStatsAddErrorsWarnings() {
+        ProcessStats stats = new ProcessStats();
+        stats.addErrors(3);
+        stats.addWarnings(2);
+        assertEquals(3, stats.getErrors());
+        assertEquals(2, stats.getWarnings());
+    }
+
+    @Test
+    void processStatsSheets() {
+        ProcessStats stats = new ProcessStats();
+        assertTrue(stats.getSheets().isEmpty());
+        stats.getSheets().add("Sheet1");
+        assertEquals(1, stats.getSheets().size());
+    }
+
+    @Test
+    void processStatsSetters() {
+        ProcessStats stats = new ProcessStats();
+        stats.setStartedAt(100L);
+        assertEquals(100L, stats.getStartedAt());
+        stats.setEndedAt(200L);
+        assertEquals(200L, stats.getEndedAt());
+        stats.setDurationMs(100L);
+        assertEquals(100L, stats.getDurationMs());
+    }
+
+    // ====================== PravaahIssue ======================
+
+    @Test
+    void issueError() {
+        PravaahIssue issue = PravaahIssue.error("code1", "msg1", 5, "col1", "raw", "expected");
+        assertEquals("code1", issue.getCode());
+        assertEquals("msg1", issue.getMessage());
+        assertEquals(5, issue.getRowNumber());
+        assertEquals("col1", issue.getColumn());
+        assertEquals("raw", issue.getRawValue());
+        assertEquals("expected", issue.getExpected());
+        assertEquals(PravaahIssue.Severity.ERROR, issue.getSeverity());
+    }
+
+    @Test
+    void issueWarning() {
+        PravaahIssue issue = PravaahIssue.warning("code2", "msg2", 10, "col2", null, null);
+        assertEquals(PravaahIssue.Severity.WARNING, issue.getSeverity());
+        assertNull(issue.getRawValue());
+        assertNull(issue.getExpected());
+    }
+
+    // ====================== PravaahValidationException ======================
+
+    @Test
+    void validationExceptionMessage() {
+        List<PravaahIssue> issues = Collections.singletonList(
+                PravaahIssue.error("test", "test message", 1, null, null, null));
+        PravaahValidationException ex = new PravaahValidationException(issues);
+        assertTrue(ex.getMessage().contains("1 issue"));
+        assertEquals(1, ex.getIssues().size());
+    }
+
+    @Test
+    void validationExceptionPlural() {
+        List<PravaahIssue> issues = Arrays.asList(
+                PravaahIssue.error("a", "a", 1, null, null, null),
+                PravaahIssue.error("b", "b", 2, null, null, null));
+        PravaahValidationException ex = new PravaahValidationException(issues);
+        assertTrue(ex.getMessage().contains("2 issues"));
+    }
+
+    @Test
+    void validationExceptionIssuesImmutable() {
+        List<PravaahIssue> issues = new ArrayList<>();
+        issues.add(PravaahIssue.error("a", "a", 1, null, null, null));
+        PravaahValidationException ex = new PravaahValidationException(issues);
+        assertThrows(UnsupportedOperationException.class, () -> ex.getIssues().clear());
+    }
+
+    // ====================== ProcessResult ======================
+
+    @Test
+    void processResultGetters() {
+        ProcessStats stats = PerfUtils.createStats();
+        List<Row> rows = Collections.singletonList(Row.of("a", 1));
+        List<PravaahIssue> issues = Collections.emptyList();
+        ProcessResult result = new ProcessResult(rows, issues, stats);
+        assertEquals(1, result.getRows().size());
+        assertTrue(result.getIssues().isEmpty());
+        assertNotNull(result.getStats());
+    }
+
+    // ====================== Pipeline advanced tests ======================
 
     @Test
     void pipelineTake() throws Exception {
@@ -627,7 +1557,92 @@ class PravaahTest {
         assertEquals(2, result.size());
     }
 
-    // --- JSON tests ---
+    @Test
+    void pipelineTakeMoreThanAvailable() throws Exception {
+        List<Row> input = Arrays.asList(Row.of("id", 1), Row.of("id", 2));
+        List<Row> result = Pravaah.read(input).take(100).collect();
+        assertEquals(2, result.size());
+    }
+
+    @Test
+    void pipelineSchemaWithValidation() throws Exception {
+        List<Row> input = Arrays.asList(
+                Row.of("id", "1"),
+                Row.of("id", "bad"),
+                Row.of("id", "3")
+        );
+
+        ProcessResult result = Pravaah.read(input)
+                .schema(SchemaDefinition.of("id", Schema.number()), ValidationMode.COLLECT, null)
+                .process();
+
+        assertEquals(2, result.getRows().size());
+        assertFalse(result.getIssues().isEmpty());
+    }
+
+    @Test
+    void pipelineSchemaSkipMode() throws Exception {
+        List<Row> input = Arrays.asList(
+                Row.of("id", "1"),
+                Row.of("id", "bad"),
+                Row.of("id", "3")
+        );
+
+        ProcessResult result = Pravaah.read(input)
+                .schema(SchemaDefinition.of("id", Schema.number()), ValidationMode.SKIP, null)
+                .process();
+
+        assertEquals(2, result.getRows().size());
+        assertTrue(result.getIssues().isEmpty());
+    }
+
+    @Test
+    void pipelineWriteJson() throws Exception {
+        String file = tempDir.resolve("pipeline.json").toString();
+        ProcessStats stats = Pravaah.read(Arrays.asList(Row.of("id", 1), Row.of("id", 2)))
+                .write(file, WriteOptions.defaults().format(PravaahFormat.JSON));
+        assertEquals(2, stats.getRowsWritten());
+
+        List<Row> readBack = Pravaah.read(file, ReadOptions.defaults().format(PravaahFormat.JSON)).collect();
+        assertEquals(2, readBack.size());
+    }
+
+    @Test
+    void pipelineWriteXlsx() throws Exception {
+        String file = tempDir.resolve("pipeline.xlsx").toString();
+        ProcessStats stats = Pravaah.read(Arrays.asList(Row.of("name", "Ada"), Row.of("name", "Grace")))
+                .write(file, WriteOptions.defaults().format(PravaahFormat.XLSX));
+        assertEquals(2, stats.getRowsWritten());
+    }
+
+    @Test
+    void pipelineWriteAutoDetectCsv() throws Exception {
+        String file = tempDir.resolve("auto.csv").toString();
+        ProcessStats stats = Pravaah.read(Arrays.asList(Row.of("id", 1)))
+                .write(file, WriteOptions.defaults());
+        assertEquals(1, stats.getRowsWritten());
+    }
+
+    @Test
+    void pipelineWriteAutoDetectXlsx() throws Exception {
+        String file = tempDir.resolve("auto.xlsx").toString();
+        ProcessStats stats = Pravaah.read(Arrays.asList(Row.of("id", 1)))
+                .write(file, WriteOptions.defaults());
+        assertEquals(1, stats.getRowsWritten());
+    }
+
+    @Test
+    void pipelineSchemaWithCleaning() throws Exception {
+        List<Row> input = Collections.singletonList(Row.of("id", " 42 "));
+        List<Row> result = Pravaah.read(input)
+                .schema(SchemaDefinition.of("id", Schema.number()), null,
+                        CleaningOptions.defaults().trim(true))
+                .collect();
+        assertEquals(1, result.size());
+        assertEquals(42.0, result.get(0).get("id"));
+    }
+
+    // ====================== JSON tests ======================
 
     @Test
     void jsonRoundTrip() throws Exception {
@@ -648,7 +1663,81 @@ class PravaahTest {
         assertEquals(3, rows.get(0).get("id"));
     }
 
-    // --- Write pipeline ---
+    @Test
+    void jsonParseBooleans() {
+        List<Row> rows = Pravaah.parseJsonRows("[{\"active\": true, \"deleted\": false}]");
+        assertEquals(true, rows.get(0).get("active"));
+        assertEquals(false, rows.get(0).get("deleted"));
+    }
+
+    @Test
+    void jsonParseNull() {
+        List<Row> rows = Pravaah.parseJsonRows("[{\"value\": null}]");
+        assertNull(rows.get(0).get("value"));
+    }
+
+    @Test
+    void jsonParseNestedObject() {
+        List<Row> rows = Pravaah.parseJsonRows("[{\"nested\": {\"a\": 1}}]");
+        assertTrue(rows.get(0).get("nested") instanceof String);
+        assertTrue(((String) rows.get(0).get("nested")).contains("\"a\""));
+    }
+
+    @Test
+    void jsonParseEmptyArray() {
+        List<Row> rows = Pravaah.parseJsonRows("[]");
+        assertTrue(rows.isEmpty());
+    }
+
+    @Test
+    void jsonParseEmptyObject() {
+        List<Row> rows = Pravaah.parseJsonRows("[{}]");
+        assertEquals(1, rows.size());
+        assertTrue(rows.get(0).isEmpty());
+    }
+
+    @Test
+    void jsonParseEscapedStrings() {
+        List<Row> rows = Pravaah.parseJsonRows("[{\"name\": \"O\\\"Brien\"}]");
+        assertEquals("O\"Brien", rows.get(0).get("name"));
+    }
+
+    @Test
+    void jsonParseFloat() {
+        List<Row> rows = Pravaah.parseJsonRows("[{\"v\": 3.14}]");
+        assertEquals(3.14, ((Number) rows.get(0).get("v")).doubleValue(), 0.001);
+    }
+
+    @Test
+    void jsonParseNotArray() {
+        assertThrows(IllegalArgumentException.class, () -> Pravaah.parseJsonRows("{\"a\": 1}"));
+    }
+
+    @Test
+    void jsonWriteWithNulls() throws Exception {
+        String file = tempDir.resolve("nulls.json").toString();
+        Row row = Row.of("a", 1);
+        row.put("b", null);
+        row.put("c", true);
+        row.put("d", "text");
+        Pravaah.write(Collections.singletonList(row), file,
+                WriteOptions.defaults().format(PravaahFormat.JSON));
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains("null"));
+        assertTrue(content.contains("true"));
+        assertTrue(content.contains("\"text\""));
+    }
+
+    @Test
+    void jsonWriteSpecialChars() throws Exception {
+        String file = tempDir.resolve("special.json").toString();
+        Pravaah.write(Collections.singletonList(Row.of("name", "O\"Brien")), file,
+                WriteOptions.defaults().format(PravaahFormat.JSON));
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains("O\\\"Brien"));
+    }
+
+    // ====================== Write pipeline ======================
 
     @Test
     void pipelineWrite() throws Exception {
@@ -658,7 +1747,128 @@ class PravaahTest {
         assertEquals(2, stats.getRowsWritten());
     }
 
-    // --- CSV value inference ---
+    // ====================== Pravaah static methods ======================
+
+    @Test
+    void pravaahReadFromFileAutoFormat() throws Exception {
+        String file = tempDir.resolve("auto.csv").toString();
+        Pravaah.write(Collections.singletonList(Row.of("x", 1)), file,
+                WriteOptions.defaults().format(PravaahFormat.CSV));
+        List<Row> rows = Pravaah.read(file).collect();
+        assertEquals(1, rows.size());
+    }
+
+    @Test
+    void pravaahWriteAutoFormat() throws Exception {
+        String file = tempDir.resolve("auto.json").toString();
+        Pravaah.write(Collections.singletonList(Row.of("x", 1)), file);
+        List<Row> rows = Pravaah.read(file, ReadOptions.defaults().format(PravaahFormat.JSON)).collect();
+        assertEquals(1, rows.size());
+    }
+
+    @Test
+    void pravaahReadFromByteArrayDefaultFormat() throws Exception {
+        String file = tempDir.resolve("bytes.xlsx").toString();
+        Pravaah.write(Collections.singletonList(Row.of("x", 1)), file,
+                WriteOptions.defaults().format(PravaahFormat.XLSX));
+        byte[] data = Files.readAllBytes(Paths.get(file));
+        List<Row> rows = Pravaah.read(data, ReadOptions.defaults()).collect();
+        assertEquals(1, rows.size());
+    }
+
+    @Test
+    void pravaahParseBytesWithSchema() throws Exception {
+        byte[] csv = "id,name\n1,Ada\n2,Grace\n".getBytes(StandardCharsets.UTF_8);
+        List<Row> rows = Pravaah.parse(csv,
+                SchemaDefinition.of("id", Schema.number(), "name", Schema.string()),
+                ReadOptions.defaults().format(PravaahFormat.CSV));
+        assertEquals(2, rows.size());
+        assertEquals(1.0, rows.get(0).get("id"));
+    }
+
+    @Test
+    void pravaahParseFileWithSchema() throws Exception {
+        String file = tempDir.resolve("parse.csv").toString();
+        Pravaah.write(Arrays.asList(Row.of("id", 1), Row.of("id", 2)), file,
+                WriteOptions.defaults().format(PravaahFormat.CSV));
+
+        List<Row> rows = Pravaah.parse(file,
+                SchemaDefinition.of("id", Schema.number()),
+                ReadOptions.defaults().format(PravaahFormat.CSV));
+        assertEquals(2, rows.size());
+    }
+
+    @Test
+    void pravaahParseDetailedFromFile() throws Exception {
+        String file = tempDir.resolve("detailed.csv").toString();
+        Files.write(Paths.get(file), "email\nbad\nada@example.com\n".getBytes(StandardCharsets.UTF_8));
+
+        ProcessResult result = Pravaah.parseDetailed(file,
+                SchemaDefinition.of("email", Schema.email()),
+                ReadOptions.defaults().format(PravaahFormat.CSV).validation(ValidationMode.COLLECT));
+        assertEquals(1, result.getRows().size());
+        assertEquals(1, result.getIssues().size());
+    }
+
+    @Test
+    void pravaahParseDetailedWithDeduplication() throws Exception {
+        byte[] csv = "id,name\n1,Ada\n1,Ada\n2,Grace\n".getBytes(StandardCharsets.UTF_8);
+        ProcessResult result = Pravaah.parseDetailed(csv,
+                SchemaDefinition.of("id", Schema.number(), "name", Schema.string()),
+                ReadOptions.defaults().format(PravaahFormat.CSV).validation(ValidationMode.COLLECT)
+                        .cleaning(CleaningOptions.defaults().dedupeKey("id")));
+        assertEquals(2, result.getRows().size());
+    }
+
+    @Test
+    void pravaahParseDetailedFailFast() {
+        byte[] csv = "id\nbad\n1\n".getBytes(StandardCharsets.UTF_8);
+        assertThrows(PravaahValidationException.class, () ->
+                Pravaah.parseDetailed(csv,
+                        SchemaDefinition.of("id", Schema.number()),
+                        ReadOptions.defaults().format(PravaahFormat.CSV).validation(ValidationMode.FAIL_FAST)));
+    }
+
+    @Test
+    void pravaahParseDetailedSkipMode() throws Exception {
+        byte[] csv = "id\nbad\n1\n".getBytes(StandardCharsets.UTF_8);
+        ProcessResult result = Pravaah.parseDetailed(csv,
+                SchemaDefinition.of("id", Schema.number()),
+                ReadOptions.defaults().format(PravaahFormat.CSV).validation(ValidationMode.SKIP));
+        assertEquals(1, result.getRows().size());
+        assertTrue(result.getIssues().isEmpty());
+    }
+
+    @Test
+    void pravaahEvaluateFormula() {
+        assertEquals(6.0, Pravaah.evaluateFormula("=SUM(a,b)", Row.of("a", 2, "b", 4)));
+    }
+
+    @Test
+    void pravaahQuery() {
+        List<Row> rows = Collections.singletonList(Row.of("id", 1, "name", "Ada"));
+        List<Row> result = Pravaah.query(rows, "SELECT name");
+        assertEquals("Ada", result.get(0).get("name"));
+    }
+
+    @Test
+    void pravaahCreateIndex() {
+        List<Row> rows = Arrays.asList(Row.of("k", "a"), Row.of("k", "a"), Row.of("k", "b"));
+        Map<String, List<Row>> index = Pravaah.createIndex(rows, "k");
+        assertEquals(2, index.get("a").size());
+    }
+
+    @Test
+    void pravaahJoinRows() {
+        List<Row> left = Collections.singletonList(Row.of("id", 1, "x", "a"));
+        List<Row> right = Collections.singletonList(Row.of("id", 1, "y", "b"));
+        List<Row> joined = Pravaah.joinRows(left, right, "id");
+        assertEquals(1, joined.size());
+        assertEquals("a", joined.get(0).get("x"));
+        assertEquals("b", joined.get(0).get("y"));
+    }
+
+    // ====================== CSV value inference ======================
 
     @Test
     void csvValueInference() {
@@ -666,5 +1876,182 @@ class PravaahTest {
         assertEquals(42, CsvReader.inferValue("42"));
         assertEquals(false, CsvReader.inferValue("FALSE"));
         assertEquals("Ada", CsvReader.inferValue("Ada"));
+    }
+
+    // ====================== ReadOptions / WriteOptions / CleaningOptions ======================
+
+    @Test
+    void readOptionsChaining() {
+        ReadOptions opts = ReadOptions.defaults()
+                .format(PravaahFormat.CSV)
+                .sheetName("Sheet1")
+                .sheetIndex(0)
+                .headers(true)
+                .headerNames(Arrays.asList("a", "b"))
+                .delimiter(";")
+                .inferTypes(true)
+                .formulas("preserve")
+                .validation(ValidationMode.COLLECT)
+                .cleaning(CleaningOptions.defaults());
+
+        assertEquals(PravaahFormat.CSV, opts.getFormat());
+        assertEquals("Sheet1", opts.getSheetName());
+        assertEquals(0, opts.getSheetIndex().intValue());
+        assertTrue(opts.getHeaders());
+        assertEquals(2, opts.getHeaderNames().size());
+        assertEquals(";", opts.getDelimiter());
+        assertTrue(opts.isInferTypes());
+        assertEquals("preserve", opts.getFormulas());
+        assertEquals(ValidationMode.COLLECT, opts.getValidation());
+        assertNotNull(opts.getCleaning());
+    }
+
+    @Test
+    void writeOptionsChaining() {
+        WriteOptions opts = WriteOptions.defaults()
+                .format(PravaahFormat.XLSX)
+                .sheetName("Data")
+                .headers(Arrays.asList("col1", "col2"))
+                .delimiter("\t");
+
+        assertEquals(PravaahFormat.XLSX, opts.getFormat());
+        assertEquals("Data", opts.getSheetName());
+        assertEquals(2, opts.getHeaders().size());
+        assertEquals("\t", opts.getDelimiter());
+    }
+
+    @Test
+    void cleaningOptionsChaining() {
+        CleaningOptions opts = CleaningOptions.defaults()
+                .trim(true)
+                .normalizeWhitespace(true)
+                .dedupeKey("id", "name")
+                .fuzzyHeader("email", "e-mail", "Email Address");
+
+        assertTrue(opts.isTrim());
+        assertTrue(opts.isNormalizeWhitespace());
+        assertEquals(2, opts.getDedupeKey().size());
+        assertEquals(1, opts.getFuzzyHeaders().size());
+        assertEquals(2, opts.getFuzzyHeaders().get("email").size());
+    }
+
+    @Test
+    void cleaningOptionsFuzzyHeadersMap() {
+        Map<String, List<String>> map = new LinkedHashMap<>();
+        map.put("email", Arrays.asList("e-mail", "Email Address"));
+        CleaningOptions opts = CleaningOptions.defaults().fuzzyHeaders(map);
+        assertEquals(1, opts.getFuzzyHeaders().size());
+    }
+
+    // ====================== Schema builders ======================
+
+    @Test
+    void schemaBuilders() {
+        FieldDefinition str = Schema.string();
+        assertEquals(FieldKind.STRING, str.getKind());
+        assertTrue(str.isCoerce());
+        assertFalse(str.isOptional());
+
+        FieldDefinition num = Schema.number(true);
+        assertEquals(FieldKind.NUMBER, num.getKind());
+        assertTrue(num.isOptional());
+
+        FieldDefinition bool = Schema.bool(true);
+        assertEquals(FieldKind.BOOLEAN, bool.getKind());
+
+        FieldDefinition date = Schema.date(true);
+        assertEquals(FieldKind.DATE, date.getKind());
+
+        FieldDefinition email = Schema.email(true);
+        assertEquals(FieldKind.EMAIL, email.getKind());
+
+        FieldDefinition phone = Schema.phone(true);
+        assertEquals(FieldKind.PHONE, phone.getKind());
+
+        FieldDefinition any = Schema.any();
+        assertEquals(FieldKind.ANY, any.getKind());
+    }
+
+    @Test
+    void fieldDefinitionDefaultValue() {
+        FieldDefinition fd = Schema.string().defaultValue("hello");
+        assertTrue(fd.hasDefaultValue());
+        assertEquals("hello", fd.getDefaultValue());
+    }
+
+    @Test
+    void fieldDefinitionNoDefault() {
+        FieldDefinition fd = Schema.string();
+        assertFalse(fd.hasDefaultValue());
+    }
+
+    @Test
+    void schemaDefinitionFactory() {
+        SchemaDefinition sd1 = SchemaDefinition.of("a", Schema.string());
+        assertEquals(1, sd1.size());
+
+        SchemaDefinition sd2 = SchemaDefinition.of("a", Schema.string(), "b", Schema.number());
+        assertEquals(2, sd2.size());
+
+        SchemaDefinition sd3 = SchemaDefinition.of("a", Schema.string(), "b", Schema.number(), "c", Schema.bool());
+        assertEquals(3, sd3.size());
+    }
+
+    @Test
+    void schemaDefinitionField() {
+        SchemaDefinition sd = new SchemaDefinition()
+                .field("a", Schema.string())
+                .field("b", Schema.number());
+        assertEquals(2, sd.size());
+    }
+
+    // ====================== ValidationMode enum ======================
+
+    @Test
+    void validationModeValues() {
+        ValidationMode[] modes = ValidationMode.values();
+        assertTrue(modes.length >= 3);
+        assertNotNull(ValidationMode.valueOf("COLLECT"));
+        assertNotNull(ValidationMode.valueOf("FAIL_FAST"));
+        assertNotNull(ValidationMode.valueOf("SKIP"));
+    }
+
+    // ====================== FieldKind enum ======================
+
+    @Test
+    void fieldKindValues() {
+        FieldKind[] kinds = FieldKind.values();
+        assertTrue(kinds.length >= 7);
+        assertNotNull(FieldKind.valueOf("STRING"));
+        assertNotNull(FieldKind.valueOf("NUMBER"));
+        assertNotNull(FieldKind.valueOf("BOOLEAN"));
+        assertNotNull(FieldKind.valueOf("DATE"));
+        assertNotNull(FieldKind.valueOf("EMAIL"));
+        assertNotNull(FieldKind.valueOf("PHONE"));
+        assertNotNull(FieldKind.valueOf("ANY"));
+    }
+
+    // ====================== Issue report with warning ======================
+
+    @Test
+    void issueReportWithWarnings() throws Exception {
+        List<PravaahIssue> issues = Arrays.asList(
+                PravaahIssue.error("err", "error msg", 1, "col1", "raw1", "expected1"),
+                PravaahIssue.warning("warn", "warning msg", 2, null, null, null)
+        );
+        String file = tempDir.resolve("mixed_issues.csv").toString();
+        SchemaValidator.writeIssueReport(issues, file);
+        String content = new String(Files.readAllBytes(Paths.get(file)));
+        assertTrue(content.contains("error"));
+        assertTrue(content.contains("warning"));
+    }
+
+    // ====================== Normalization ======================
+
+    @Test
+    void normalizeHeaderVariants() {
+        assertEquals("email address", SchemaValidator.normalizeHeader("  Email_Address  "));
+        assertEquals("first name", SchemaValidator.normalizeHeader("First-Name"));
+        assertEquals("id", SchemaValidator.normalizeHeader("  ID  "));
     }
 }
