@@ -30,6 +30,12 @@ class PravaahTest {
     @TempDir
     Path tempDir;
 
+    @Test
+    void runtimeImplementationIsAvailable() {
+        assertNotNull(Pravaah.runtimeImplementation());
+        assertFalse(Pravaah.runtimeImplementation().trim().isEmpty());
+    }
+
     // ====================== Row ======================
 
     @Test

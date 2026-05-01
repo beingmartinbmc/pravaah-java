@@ -7,6 +7,7 @@ import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
 import io.github.beingmartinbmc.pravaah.pipeline.PravaahPipeline;
 import io.github.beingmartinbmc.pravaah.query.QueryEngine;
+import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
 import io.github.beingmartinbmc.pravaah.schema.*;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxReader;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxWriter;
@@ -22,6 +23,10 @@ import java.util.*;
 public final class Pravaah {
 
     private Pravaah() {}
+
+    public static String runtimeImplementation() {
+        return RuntimeSupport.implementation();
+    }
 
     // --- Read ---
 

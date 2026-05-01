@@ -2,9 +2,9 @@ package io.github.beingmartinbmc.pravaah.csv;
 
 import io.github.beingmartinbmc.pravaah.ReadOptions;
 import io.github.beingmartinbmc.pravaah.Row;
+import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
@@ -38,13 +38,8 @@ public final class CsvReader {
         }
 
         int initialCapacity = Math.max(16, stream.available());
-        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        try {
-            String text = readFully(reader, initialCapacity);
-            return parseText(text, delimiter, useHeaders, explicitHeaders, inferTypes);
-        } finally {
-            reader.close();
-        }
+        String text = RuntimeSupport.readUtf8(stream, initialCapacity);
+        return parseText(text, delimiter, useHeaders, explicitHeaders, inferTypes);
     }
 
     static List<Row> parseText(String text, char delimiter, boolean autoHeaders,
@@ -101,13 +96,8 @@ public final class CsvReader {
         char delimiter = options.getDelimiter().charAt(0);
 
         int initialCapacity = Math.max(16, stream.available());
-        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
-        try {
-            String text = readFully(reader, initialCapacity);
-            return scanRecordCount(text, delimiter, skipFirst);
-        } finally {
-            reader.close();
-        }
+        String text = RuntimeSupport.readUtf8(stream, initialCapacity);
+        return scanRecordCount(text, delimiter, skipFirst);
     }
 
     private static int scanRecordCount(String text, char delimiter, boolean skipFirst) {
@@ -358,16 +348,6 @@ public final class CsvReader {
         if ("true".equalsIgnoreCase(value)) return true;
         if ("false".equalsIgnoreCase(value)) return false;
         return value;
-    }
-
-    private static String readFully(Reader reader, int initialCapacity) throws IOException {
-        StringBuilder sb = new StringBuilder(initialCapacity);
-        char[] buffer = new char[8192];
-        int read;
-        while ((read = reader.read(buffer)) != -1) {
-            sb.append(buffer, 0, read);
-        }
-        return sb.toString();
     }
 
     static class ParseResult {
