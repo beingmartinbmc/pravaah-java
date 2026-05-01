@@ -54,44 +54,66 @@ Most Java CSV libraries solve **parsing**. You still need to write validation, t
 
 ## Benchmarks
 
-**Machine:** Apple Silicon M3 Pro, 16 cores, 36 GB RAM, Zulu OpenJDK 1.8.0_491 (aarch64), `-Xmx6g`
+**Machine:** Apple Silicon M3 Pro, 16 cores, 36 GB RAM, `-Xmx6g`
 
-### 1. CSV Parsing Speed
+Benchmarked against **all major Java CSV libraries** across **4 JDK versions**:
 
-Raw parse performance. Pravaah handles **RFC-compliant quoted fields, multi-line values, and CRLF** -- the DIY approach doesn't.
+| JDK | Version | GC |
+|---|---|---|
+| JDK 8 | Zulu OpenJDK 1.8.0_491 | Parallel GC |
+| JDK 11 | JBR-DCEVM 11.0.16 | G1GC |
+| JDK 17 | Corretto 17.0.18 | G1GC |
+| JDK 25 | Zulu 25.0.1.0.101 (OneJDK) | G1GC |
 
-| Rows | Pravaah | BufferedReader + split | String.split |
-|---:|---:|---:|---:|
-| 10K | 1 ms | <1 ms | <1 ms |
-| 100K | 11 ms | 10 ms | 9 ms |
-| **1M** | **145 ms** | 105 ms | 116 ms |
+### 1. CSV Parsing Speed — 1M Rows (43.6 MB)
 
-> At 100K rows, Pravaah is **within 1 ms** of raw `split()`. At 1M rows it's ~1.4x -- **but `split()` breaks on the first quoted comma.** Pravaah handles every RFC 4180 edge case correctly.
+Raw parse performance. All libraries parse the same 1M-row CSV. Median of 5 runs after 3 warmup iterations.
 
-### 2. Validation Pipeline
-
-Parse + validate email + coerce types + collect errors. **100K rows, ~10% bad data.**
-
-| Approach | Time | Valid Rows | Errors | LOC |
+| Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
 |---|---:|---:|---:|---:|
-| **Pravaah** | **42 ms** | 90,027 | 29,919 | **10** |
-| DIY (BufferedReader + regex + try/catch) | 21 ms | 90,027 | 29,919 | **120+** |
+| **Pravaah** | **99 ms** | 353 ms | 199 ms | 193 ms |
+| BufferedReader + split | 127 ms | 123 ms | 96 ms | 114 ms |
+| Apache Commons CSV | 157 ms | 233 ms | 221 ms | 236 ms |
+| **uniVocity-parsers** | **65 ms** | 152 ms | 139 ms | 141 ms |
+| OpenCSV | 127 ms | 183 ms | 163 ms | 155 ms |
+| Jackson CSV | 137 ms | 146 ms | 131 ms | 156 ms |
 
-> DIY is faster because it does less -- no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every new file format. Pravaah gives you a **12x reduction in code** for a 2x time cost that's invisible at application scale.
+**Scaling across sizes (JDK 17):**
 
-### 3. Large File Streaming
+| Rows | Pravaah | uniVocity | Jackson CSV | OpenCSV | Commons CSV | BR+split |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10K | 1 ms | 2 ms | 2 ms | 2 ms | 2 ms | 1 ms |
+| 100K | 22 ms | 11 ms | 13 ms | 14 ms | 21 ms | 9 ms |
+| 1M | 199 ms | 139 ms | 131 ms | 163 ms | 221 ms | 96 ms |
 
-Processing millions of rows with filtering and full schema validation.
+> **Key insight:** `BufferedReader + split` is the fastest raw parser, but it **breaks on the first quoted comma**. Pravaah handles every RFC 4180 edge case (quoted fields, multi-line values, embedded commas, CRLF). uniVocity is the fastest feature-complete parser for raw parsing. Pravaah is competitive and brings schema validation that none of the others include.
 
-| Rows | Operation | Time | Throughput | Peak Memory |
-|---:|---|---:|---:|---:|
-| 1M | read + filter + drain | 263 ms | 3.8M rows/sec | 743 MB |
-| 1M | full schema validation | 523 ms | 1.9M rows/sec | -- |
-| 2M | read + filter + drain | 546 ms | 3.7M rows/sec | 1.4 GB |
-| 2M | full schema validation | 1,164 ms | 1.7M rows/sec | -- |
-| **5M** | read + filter + drain | **6,044 ms** | **827K rows/sec** | 3.5 GB |
+### 2. Large File Streaming — 1M Rows, Throughput & Memory
 
-> **3.8 million rows per second** at 1M rows with filtering. 1.9M rows/sec with full email + number + boolean + string validation on every field. At 5M rows the JVM's GC pressure under Java 8 is visible -- Java 11+ with G1GC handles this range significantly better.
+| Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
+|---|---:|---:|---:|---:|
+| **Pravaah** | 102 ms / 1.08 GB | 359 ms / 690 MB | 228 ms / 702 MB | 195 ms / 691 MB |
+| BufferedReader+split | 129 ms / 888 MB | 138 ms / 231 MB | 96 ms / 116 MB | 114 ms / 34 MB |
+| Apache Commons CSV | 158 ms / 362 MB | 235 ms / 47 MB | 220 ms / 80 MB | 235 ms / 94 MB |
+| uniVocity-parsers | 65 ms / 430 MB | 156 ms / 362 MB | 144 ms / 383 MB | 142 ms / 386 MB |
+| OpenCSV | 126 ms / 592 MB | 183 ms / 41 MB | 169 ms / 36 MB | 163 ms / 63 MB |
+| Jackson CSV | 136 ms / 625 MB | 136 ms / 16 MB | 132 ms / 136 MB | 162 ms / 90 MB |
+| Pravaah (full schema) | 1,937 ms | 702 ms | 597 ms | 523 ms |
+
+*Format: time / peak memory. Full schema = parse + email/number/bool/string validation on every field.*
+
+> **Pravaah's full pipeline (parse + schema + validate)** runs at **1.9M rows/sec on JDK 25** — no other library in this table includes validation at all. The full-schema pass on JDK 25 is **3.7x faster** than on JDK 8 thanks to improved GC and JIT.
+
+### 3. Validation Pipeline — 100K Rows, ~10% Bad Data
+
+Parse + validate email format + coerce number/boolean + collect errors with row-level diagnostics.
+
+| Approach | JDK 8 | JDK 11 | JDK 17 | JDK 25 | LOC |
+|---|---:|---:|---:|---:|---:|
+| **Pravaah** | 45 ms | 73 ms | 55 ms | 67 ms | **10** |
+| DIY (BR + regex + try/catch) | 22 ms | 29 ms | 22 ms | 26 ms | **120+** |
+
+> DIY is faster because it does less — no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every file format. **None of the competitor libraries include validation** — you'd write the same 120+ lines of DIY code on top of any of them.
 
 ### 4. The Real Benchmark: Lines of Code
 
@@ -120,6 +142,16 @@ Every other library gives you a `List<String[]>`. You still need to:
 - Normalize headers (`"Email Address"` -> `"email"`)
 
 **Pravaah does all of this declaratively.**
+
+### 5. JDK Version Insights
+
+| Observation | Details |
+|---|---|
+| **JDK 8 has lowest parse latency** | Parallel GC with 6 GB heap runs aggressively; good for batch parsing but 1+ GB peak memory |
+| **JDK 11+ dramatically reduces memory** | G1GC keeps peak memory 2-10x lower (Jackson CSV: 625 MB on JDK 8 → 16 MB on JDK 11) |
+| **JDK 17/25 best for Pravaah full pipeline** | Full schema validation: 1,937 ms (JDK 8) → 523 ms (JDK 25) — **3.7x faster** |
+| **uniVocity fastest raw parser** | Consistently #1 for raw CSV parsing across all JDKs |
+| **Pravaah's value is in the pipeline** | 2-3x slower on raw parsing, but the only library with built-in validation, coercion, and error collection |
 
 ---
 
@@ -293,12 +325,25 @@ All types support `.optional(true)`, `.defaultValue(x)`, `.coerce(false)`, and `
 ## Running Benchmarks
 
 ```bash
-mvn test-compile
-java -Xmx6g -cp target/classes:target/test-classes \
+# Download competitor JARs (one-time)
+mkdir -p benchmark-libs
+curl -sL https://repo1.maven.org/maven2/com/univocity/univocity-parsers/2.9.1/univocity-parsers-2.9.1.jar -o benchmark-libs/univocity-parsers-2.9.1.jar
+curl -sL https://repo1.maven.org/maven2/org/apache/commons/commons-csv/1.12.0/commons-csv-1.12.0.jar -o benchmark-libs/commons-csv-1.12.0.jar
+curl -sL https://repo1.maven.org/maven2/com/opencsv/opencsv/5.9/opencsv-5.9.jar -o benchmark-libs/opencsv-5.9.jar
+curl -sL https://repo1.maven.org/maven2/com/fasterxml/jackson/dataformat/jackson-dataformat-csv/2.18.4/jackson-dataformat-csv-2.18.4.jar -o benchmark-libs/jackson-dataformat-csv-2.18.4.jar
+# (also download transitive deps: jackson-core, jackson-databind, jackson-annotations,
+#  commons-io, commons-codec, commons-lang3, commons-text, commons-collections4, commons-beanutils, commons-logging)
+
+# Compile and run
+mvn compile test-compile
+java -Xmx6g -cp target/classes:target/test-classes:benchmark-libs/* \
   io.github.beingmartinbmc.pravaah.BenchmarkRunner
+
+# Run across all JDK versions
+chmod +x run-benchmark.sh && ./run-benchmark.sh
 ```
 
-The benchmark generates CSV files (10K to 5M rows), runs each test 5 times, and reports median timings.
+The benchmark generates CSV files (10K to 1M rows), runs each test 5 times after 3 warmup iterations, and reports median timings. Results are saved to `benchmark-results/`.
 
 ---
 
@@ -314,7 +359,7 @@ mvn test
 
 ## Java 8 Compatibility
 
-Pravaah targets Java 8 (`-source 1.8 -target 1.8`). No `var`, no records, no text blocks, no `List.of()`. Works on Java 8 through 21+.
+Pravaah targets Java 8 (`-source 1.8 -target 1.8`). No `var`, no records, no text blocks, no `List.of()`. Tested and benchmarked on Java 8, 11, 17, and 25.
 
 ---
 
