@@ -366,6 +366,25 @@ mvn test
 
 Pravaah targets Java 8 (`-source 1.8 -target 1.8`). No `var`, no records, no text blocks, no `List.of()`. Tested and benchmarked on Java 8, 11, 17, and 25.
 
+### Multi-Release JAR
+
+Pravaah is packaged as a **Multi-Release JAR**:
+
+| Source set | Runtime target | Purpose |
+|---|---|---|
+| `src/main/java` | Java 8 baseline | Portable implementation for all JVMs |
+| `src/main/java11` | Java 11+ override | Uses newer JDK APIs where they improve hot paths |
+| `src/main/java17` | Java 17+ override | Preferred implementation on modern LTS JVMs |
+
+The JVM automatically loads the newest compatible class from `META-INF/versions/*` at runtime. For example, Java 8 uses the baseline `RuntimeSupport`, Java 11 uses the Java 11 overlay, and Java 17+ uses the Java 17 overlay.
+
+```java
+System.out.println(Pravaah.runtimeImplementation());
+// java8, java11, or java17 depending on runtime
+```
+
+Build note: creating the multi-release artifact requires a JDK that can compile the Java 11 and Java 17 overlays. The generated JAR still runs on Java 8.
+
 ---
 
 ## License
