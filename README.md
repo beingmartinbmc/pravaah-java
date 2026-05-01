@@ -71,20 +71,20 @@ Raw parse performance. All libraries parse the same 1M-row CSV. Median of 5 runs
 
 | Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
 |---|---:|---:|---:|---:|
-| **Pravaah** | **99 ms** | 353 ms | 199 ms | 193 ms |
-| BufferedReader + split | 127 ms | 123 ms | 96 ms | 114 ms |
-| Apache Commons CSV | 157 ms | 233 ms | 221 ms | 236 ms |
-| **uniVocity-parsers** | **65 ms** | 152 ms | 139 ms | 141 ms |
-| OpenCSV | 127 ms | 183 ms | 163 ms | 155 ms |
-| Jackson CSV | 137 ms | 146 ms | 131 ms | 156 ms |
+| **Pravaah** | **108 ms** | 343 ms | 174 ms | 216 ms |
+| BufferedReader + split | 104 ms | 122 ms | 106 ms | 109 ms |
+| Apache Commons CSV | 158 ms | 234 ms | 195 ms | 271 ms |
+| **uniVocity-parsers** | **65 ms** | 155 ms | 152 ms | 143 ms |
+| OpenCSV | 130 ms | 182 ms | 158 ms | 161 ms |
+| Jackson CSV | 113 ms | 144 ms | 150 ms | 153 ms |
 
 **Scaling across sizes (JDK 17):**
 
 | Rows | Pravaah | uniVocity | Jackson CSV | OpenCSV | Commons CSV | BR+split |
 |---:|---:|---:|---:|---:|---:|---:|
-| 10K | 1 ms | 2 ms | 2 ms | 2 ms | 2 ms | 1 ms |
-| 100K | 22 ms | 11 ms | 13 ms | 14 ms | 21 ms | 9 ms |
-| 1M | 199 ms | 139 ms | 131 ms | 163 ms | 221 ms | 96 ms |
+| 10K | 1 ms | 1 ms | 1 ms | 1 ms | 1 ms | 1 ms |
+| 100K | 21 ms | 13 ms | 16 ms | 15 ms | 18 ms | 11 ms |
+| 1M | 174 ms | 152 ms | 150 ms | 158 ms | 195 ms | 106 ms |
 
 > **Key insight:** `BufferedReader + split` is the fastest raw parser, but it **breaks on the first quoted comma**. Pravaah handles every RFC 4180 edge case (quoted fields, multi-line values, embedded commas, CRLF). uniVocity is the fastest feature-complete parser for raw parsing. Pravaah is competitive and brings schema validation that none of the others include.
 
@@ -92,17 +92,17 @@ Raw parse performance. All libraries parse the same 1M-row CSV. Median of 5 runs
 
 | Library | JDK 8 | JDK 11 | JDK 17 | JDK 25 |
 |---|---:|---:|---:|---:|
-| **Pravaah** | 102 ms / 1.08 GB | 359 ms / 690 MB | 228 ms / 702 MB | 195 ms / 691 MB |
-| BufferedReader+split | 129 ms / 888 MB | 138 ms / 231 MB | 96 ms / 116 MB | 114 ms / 34 MB |
-| Apache Commons CSV | 158 ms / 362 MB | 235 ms / 47 MB | 220 ms / 80 MB | 235 ms / 94 MB |
-| uniVocity-parsers | 65 ms / 430 MB | 156 ms / 362 MB | 144 ms / 383 MB | 142 ms / 386 MB |
-| OpenCSV | 126 ms / 592 MB | 183 ms / 41 MB | 169 ms / 36 MB | 163 ms / 63 MB |
-| Jackson CSV | 136 ms / 625 MB | 136 ms / 16 MB | 132 ms / 136 MB | 162 ms / 90 MB |
-| Pravaah (full schema) | 1,937 ms | 702 ms | 597 ms | 523 ms |
+| **Pravaah** | 106 ms / 893 MB | 345 ms / 665 MB | 178 ms / 676 MB | 222 ms / 665 MB |
+| BufferedReader+split | 104 ms / 918 MB | 133 ms / 32 MB | 107 ms / 16 MB | 104 ms / 58 MB |
+| Apache Commons CSV | 158 ms / 399 MB | 235 ms / 47 MB | 196 ms / 96 MB | 271 ms / 102 MB |
+| uniVocity-parsers | 65 ms / 445 MB | 155 ms / 362 MB | 152 ms / 381 MB | 143 ms / 386 MB |
+| OpenCSV | 128 ms / 599 MB | 184 ms / 41 MB | 160 ms / 64 MB | 158 ms / 63 MB |
+| Jackson CSV | 116 ms / 638 MB | 139 ms / 16 MB | 166 ms / 92 MB | 151 ms / 90 MB |
+| Pravaah (full schema) | 380 ms | 702 ms | 488 ms | 523 ms |
 
 *Format: time / peak memory. Full schema = parse + email/number/bool/string validation on every field.*
 
-> **Pravaah's full pipeline (parse + schema + validate)** runs at **1.9M rows/sec on JDK 25** — no other library in this table includes validation at all. The full-schema pass on JDK 25 is **3.7x faster** than on JDK 8 thanks to improved GC and JIT.
+> **Pravaah's full pipeline (parse + schema + validate)** runs at **2.6M rows/sec on JDK 8** and **2.0M rows/sec on JDK 17** — no other library in this table includes validation at all. The latest optimization pass removed per-row memory sampling and reduced validation allocations, cutting JDK 8 full-schema time from **1,937 ms to 380 ms**.
 
 ### 3. Validation Pipeline — 100K Rows, ~10% Bad Data
 
@@ -110,12 +110,26 @@ Parse + validate email format + coerce number/boolean + collect errors with row-
 
 | Approach | JDK 8 | JDK 11 | JDK 17 | JDK 25 | LOC |
 |---|---:|---:|---:|---:|---:|
-| **Pravaah** | 45 ms | 73 ms | 55 ms | 67 ms | **10** |
-| DIY (BR + regex + try/catch) | 22 ms | 29 ms | 22 ms | 26 ms | **120+** |
+| **Pravaah** | 36 ms | 67 ms | 51 ms | 66 ms | **10** |
+| DIY (BR + regex + try/catch) | 21 ms | 30 ms | 21 ms | 27 ms | **120+** |
 
 > DIY is faster because it does less — no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every file format. **None of the competitor libraries include validation** — you'd write the same 120+ lines of DIY code on top of any of them.
 
-### 4. The Real Benchmark: Lines of Code
+### 4. Real Files — CSV + Spreadsheet Benchmarks (JDK 17)
+
+The benchmark suite also runs against files in `benchmark-files/`. CSV files are compared against CSV libraries; spreadsheet files are compared against **Apache POI XSSF** and **EasyExcel**.
+
+| File | Pravaah | Best competitor | Result |
+|---|---:|---:|---|
+| `Crime_Data_from_2020_to_2024.csv` (244 MB) | 361 ms | uniVocity 364 ms | Pravaah slightly faster |
+| `geographic-units...2025.csv` (145 MB) | 263 ms | uniVocity 427 ms | Pravaah faster |
+| `MOCK_DATA.xlsx` (244 KB) | 24 ms | EasyExcel 23 ms | Comparable |
+| `hts_2024_revision_9_xlsx.xlsx` (1.5 MB) | 103 ms | EasyExcel 150 ms | Pravaah faster |
+| `...2025 copy.xls` (legacy binary XLS) | Unsupported | EasyExcel 93 ms | Requires legacy XLS reader |
+
+> Pravaah's zero-dependency spreadsheet reader supports OOXML `.xlsx`. The `.xls` file is legacy binary Excel; EasyExcel can read it, while Apache POI **XSSF** and Pravaah's current reader correctly report it unsupported.
+
+### 5. The Real Benchmark: Lines of Code
 
 ```
 ┌────────────────────────────────┬───────┐
@@ -143,15 +157,15 @@ Every other library gives you a `List<String[]>`. You still need to:
 
 **Pravaah does all of this declaratively.**
 
-### 5. JDK Version Insights
+### 6. JDK Version Insights
 
 | Observation | Details |
 |---|---|
-| **JDK 8 has lowest parse latency** | Parallel GC with 6 GB heap runs aggressively; good for batch parsing but 1+ GB peak memory |
-| **JDK 11+ dramatically reduces memory** | G1GC keeps peak memory 2-10x lower (Jackson CSV: 625 MB on JDK 8 → 16 MB on JDK 11) |
-| **JDK 17/25 best for Pravaah full pipeline** | Full schema validation: 1,937 ms (JDK 8) → 523 ms (JDK 25) — **3.7x faster** |
+| **JDK 8 has lowest parse latency** | Parallel GC with 6 GB heap runs aggressively; good for batch parsing but higher peak memory |
+| **JDK 11+ can reduce memory** | G1GC often keeps competitor parsers much lower-memory, though object-heavy row materialization still dominates Pravaah |
+| **Validation hotspot was fixed** | Full schema validation on JDK 8 improved from 1,937 ms to 380 ms by sampling memory every 4,096 rows instead of every row |
 | **uniVocity fastest raw parser** | Consistently #1 for raw CSV parsing across all JDKs |
-| **Pravaah's value is in the pipeline** | 2-3x slower on raw parsing, but the only library with built-in validation, coercion, and error collection |
+| **Pravaah's value is in the pipeline** | Still slower than uniVocity for raw parsing, but the only library here with built-in validation, coercion, and error collection |
 
 ---
 
@@ -325,21 +339,12 @@ All types support `.optional(true)`, `.defaultValue(x)`, `.coerce(false)`, and `
 ## Running Benchmarks
 
 ```bash
-# Download competitor JARs (one-time)
-mkdir -p benchmark-libs
-curl -sL https://repo1.maven.org/maven2/com/univocity/univocity-parsers/2.9.1/univocity-parsers-2.9.1.jar -o benchmark-libs/univocity-parsers-2.9.1.jar
-curl -sL https://repo1.maven.org/maven2/org/apache/commons/commons-csv/1.12.0/commons-csv-1.12.0.jar -o benchmark-libs/commons-csv-1.12.0.jar
-curl -sL https://repo1.maven.org/maven2/com/opencsv/opencsv/5.9/opencsv-5.9.jar -o benchmark-libs/opencsv-5.9.jar
-curl -sL https://repo1.maven.org/maven2/com/fasterxml/jackson/dataformat/jackson-dataformat-csv/2.18.4/jackson-dataformat-csv-2.18.4.jar -o benchmark-libs/jackson-dataformat-csv-2.18.4.jar
-# (also download transitive deps: jackson-core, jackson-databind, jackson-annotations,
-#  commons-io, commons-codec, commons-lang3, commons-text, commons-collections4, commons-beanutils, commons-logging)
+# Download CSV + spreadsheet competitor JARs (one-time)
+./download-benchmark-libs.sh
 
-# Compile and run
-mvn compile test-compile
-java -Xmx6g -cp target/classes:target/test-classes:benchmark-libs/* \
-  io.github.beingmartinbmc.pravaah.BenchmarkRunner
-
-# Run across all JDK versions
+# Compile the library + benchmark runner, then run across all JDK versions.
+# BenchmarkRunner is intentionally excluded from normal `mvn test` so Maven
+# does not need competitor dependencies.
 chmod +x run-benchmark.sh && ./run-benchmark.sh
 ```
 

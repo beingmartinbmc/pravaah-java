@@ -37,9 +37,10 @@ public final class CsvReader {
             throw new IllegalArgumentException("delimiter must be a single character");
         }
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+        int initialCapacity = Math.max(16, stream.available());
+        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
         try {
-            String text = readFully(reader);
+            String text = readFully(reader, initialCapacity);
             return parseText(text, delimiter, useHeaders, explicitHeaders, inferTypes);
         } finally {
             reader.close();
@@ -99,9 +100,10 @@ public final class CsvReader {
         boolean skipFirst = options.getHeaders() == null || options.getHeaders();
         char delimiter = options.getDelimiter().charAt(0);
 
-        BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
+        int initialCapacity = Math.max(16, stream.available());
+        Reader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8));
         try {
-            String text = readFully(reader);
+            String text = readFully(reader, initialCapacity);
             return scanRecordCount(text, delimiter, skipFirst);
         } finally {
             reader.close();
@@ -318,7 +320,8 @@ public final class CsvReader {
     }
 
     private static Row buildRow(String[] fields, String[] headers, boolean headerless, boolean inferTypes) {
-        Row row = new Row();
+        int size = headers != null && !headerless ? headers.length : fields.length;
+        Row row = new Row(mapCapacity(size));
         if (headerless) {
             for (int i = 0; i < fields.length; i++) {
                 String key = "_" + (i + 1);
@@ -337,6 +340,10 @@ public final class CsvReader {
         return row;
     }
 
+    private static int mapCapacity(int entries) {
+        return Math.max(4, (int) (entries / 0.75f) + 1);
+    }
+
     public static Object inferValue(String value) {
         if (value == null || value.isEmpty()) return null;
         try {
@@ -353,8 +360,8 @@ public final class CsvReader {
         return value;
     }
 
-    private static String readFully(BufferedReader reader) throws IOException {
-        StringBuilder sb = new StringBuilder();
+    private static String readFully(Reader reader, int initialCapacity) throws IOException {
+        StringBuilder sb = new StringBuilder(initialCapacity);
         char[] buffer = new char[8192];
         int read;
         while ((read = reader.read(buffer)) != -1) {
