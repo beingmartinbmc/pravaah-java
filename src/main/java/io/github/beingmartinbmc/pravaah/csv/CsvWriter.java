@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public final class CsvWriter {
+    private static final int BUFFER_SIZE = 64 * 1024;
 
     private CsvWriter() {}
 
@@ -20,12 +21,12 @@ public final class CsvWriter {
         }
 
         BufferedWriter writer = new BufferedWriter(
-                new OutputStreamWriter(new FileOutputStream(destination), StandardCharsets.UTF_8));
+                new OutputStreamWriter(new FileOutputStream(destination), StandardCharsets.UTF_8), BUFFER_SIZE);
         try {
             if (headers != null) {
                 for (int i = 0; i < headers.size(); i++) {
                     if (i > 0) writer.write(delimiter);
-                    writer.write(csvEscape(headers.get(i)));
+                    writeEscaped(writer, headers.get(i), delimiter);
                 }
                 writer.newLine();
             }
@@ -35,13 +36,13 @@ public final class CsvWriter {
                     for (int i = 0; i < headers.size(); i++) {
                         if (i > 0) writer.write(delimiter);
                         Object val = row.get(headers.get(i));
-                        writer.write(csvEscape(val == null ? "" : String.valueOf(val)));
+                        writeEscaped(writer, val == null ? "" : String.valueOf(val), delimiter);
                     }
                 } else {
                     boolean first = true;
                     for (Object val : row.values()) {
                         if (!first) writer.write(delimiter);
-                        writer.write(csvEscape(val == null ? "" : String.valueOf(val)));
+                        writeEscaped(writer, val == null ? "" : String.valueOf(val), delimiter);
                         first = false;
                     }
                 }
@@ -52,10 +53,42 @@ public final class CsvWriter {
         }
     }
 
-    private static String csvEscape(String value) {
-        if (value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
+    private static void writeEscaped(Writer writer, String value, String delimiter) throws IOException {
+        int quoteIndex = -1;
+        boolean escape = false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '"') {
+                quoteIndex = i;
+                escape = true;
+                break;
+            }
+            if (c == '\n' || c == '\r') {
+                escape = true;
+            }
         }
-        return value;
+        if (!escape && delimiter != null && !delimiter.isEmpty() && value.indexOf(delimiter) >= 0) {
+            escape = true;
+        }
+        if (!escape) {
+            writer.write(value);
+            return;
+        }
+
+        writer.write('"');
+        if (quoteIndex == -1) {
+            writer.write(value);
+        } else {
+            int start = 0;
+            for (int i = quoteIndex; i < value.length(); i++) {
+                if (value.charAt(i) == '"') {
+                    writer.write(value, start, i - start);
+                    writer.write("\"\"");
+                    start = i + 1;
+                }
+            }
+            writer.write(value, start, value.length() - start);
+        }
+        writer.write('"');
     }
 }
