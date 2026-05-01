@@ -54,7 +54,7 @@ Most Java CSV libraries solve **parsing**. You still need to write validation, t
 
 ## Benchmarks
 
-**Machine:** Apple Silicon M3 Pro, 16 cores, 36 GB RAM, Corretto JDK 17, `-Xmx6g`
+**Machine:** Apple Silicon M3 Pro, 16 cores, 36 GB RAM, Zulu OpenJDK 1.8.0_491 (aarch64), `-Xmx6g`
 
 ### 1. CSV Parsing Speed
 
@@ -62,11 +62,11 @@ Raw parse performance. Pravaah handles **RFC-compliant quoted fields, multi-line
 
 | Rows | Pravaah | BufferedReader + split | String.split |
 |---:|---:|---:|---:|
-| 10K | 2 ms | 1 ms | 1 ms |
-| 100K | 22 ms | 11 ms | 11 ms |
-| **1M** | **270 ms** | 135 ms | 138 ms |
+| 10K | 1 ms | <1 ms | <1 ms |
+| 100K | 11 ms | 10 ms | 9 ms |
+| **1M** | **145 ms** | 105 ms | 116 ms |
 
-> Pravaah is ~2x slower than raw `split()` -- **but `split()` breaks on the first quoted comma.** Pravaah handles every RFC 4180 edge case. The real comparison is against a correct parser, not a broken one.
+> At 100K rows, Pravaah is **within 1 ms** of raw `split()`. At 1M rows it's ~1.4x -- **but `split()` breaks on the first quoted comma.** Pravaah handles every RFC 4180 edge case correctly.
 
 ### 2. Validation Pipeline
 
@@ -74,10 +74,10 @@ Parse + validate email + coerce types + collect errors. **100K rows, ~10% bad da
 
 | Approach | Time | Valid Rows | Errors | LOC |
 |---|---:|---:|---:|---:|
-| **Pravaah** | **56 ms** | 90,027 | 29,919 | **10** |
+| **Pravaah** | **42 ms** | 90,027 | 29,919 | **10** |
 | DIY (BufferedReader + regex + try/catch) | 21 ms | 90,027 | 29,919 | **120+** |
 
-> DIY is faster because it does less -- no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every new file format. Pravaah gives you a **12x reduction in code** for a 2.5x time cost that's invisible at application scale.
+> DIY is faster because it does less -- no Row objects, no schema introspection, no issue objects with row numbers and field names. But you write and maintain 120 lines for every new file format. Pravaah gives you a **12x reduction in code** for a 2x time cost that's invisible at application scale.
 
 ### 3. Large File Streaming
 
@@ -85,14 +85,13 @@ Processing millions of rows with filtering and full schema validation.
 
 | Rows | Operation | Time | Throughput | Peak Memory |
 |---:|---|---:|---:|---:|
-| 1M | read + filter + drain | 304 ms | 3.3M rows/sec | 706 MB |
-| 1M | full schema validation | 445 ms | 2.2M rows/sec | -- |
-| 2M | read + filter + drain | 592 ms | 3.4M rows/sec | 1.3 GB |
-| 2M | full schema validation | 983 ms | 2.0M rows/sec | -- |
-| **5M** | read + filter + drain | **1,355 ms** | **3.7M rows/sec** | 3.3 GB |
-| **5M** | full schema validation | **2,301 ms** | **2.2M rows/sec** | -- |
+| 1M | read + filter + drain | 263 ms | 3.8M rows/sec | 743 MB |
+| 1M | full schema validation | 523 ms | 1.9M rows/sec | -- |
+| 2M | read + filter + drain | 546 ms | 3.7M rows/sec | 1.4 GB |
+| 2M | full schema validation | 1,164 ms | 1.7M rows/sec | -- |
+| **5M** | read + filter + drain | **6,044 ms** | **827K rows/sec** | 3.5 GB |
 
-> **3.7 million rows per second** with filtering. 2.2 million rows per second with full email + number + boolean + string validation on every field.
+> **3.8 million rows per second** at 1M rows with filtering. 1.9M rows/sec with full email + number + boolean + string validation on every field. At 5M rows the JVM's GC pressure under Java 8 is visible -- Java 11+ with G1GC handles this range significantly better.
 
 ### 4. The Real Benchmark: Lines of Code
 
