@@ -1,24 +1,57 @@
 # Pravaah Java
 
-Schema-first data ingestion for Java 8+: CSV, XLS, XLSX, and JSON.
+Stop writing CSV and Excel import code.
 
-Pravaah turns customer uploads into trusted application rows: read files, normalize messy headers, validate schemas, collect rejected rows, and write clean output without parser glue code.
+Pravaah is a streaming, schema-first ingestion engine for Java that turns messy CSV, XLS, XLSX, and JSON into validated, typed rows with rejection reports.
 
-Java 8 compatible. Zero production dependencies. Multi-release JAR optimized for Java 8, 11, and 17+ runtimes.
+Replace hundreds of lines of parsing, validation, and cleanup logic with a single pipeline.
+
+Looking for the Node.js version? See [`beingmartinbmc/pravaah`](https://github.com/beingmartinbmc/pravaah).
+
+- Zero runtime dependencies
+- Works on Java 8+
+- Reads legacy `.xls` without Apache POI
+- Faster than Apache POI on the included spreadsheet benchmarks
+
+**Like Jackson for messy spreadsheets. ETL without Spark.**
 
 ```text
 CSV direct count: 7,046,063 rows, 145MB
-Pravaah Java  450ms
+Pravaah Java  330ms on JDK 17
 
-CSV collect: 1,004,894 rows, 244MB
-Pravaah Java  1.06s
+CSV read/count: 1,004,894 rows, 244MB
+Pravaah Java  348ms read/count on JDK 17
 ```
 
-Benchmarked locally on the same files used by the Sheetra/Node README, using JDK 17 on Apple Silicon.
+Benchmarked locally on the repository benchmark files using JDK 8, 11, and 17 on Apple Silicon.
 
 ---
 
 ## 30-Second Win
+
+### Before: Typical Java Import Mess
+
+```java
+BufferedReader br = new BufferedReader(new FileReader("upload.csv"));
+String[] headers = br.readLine().split(",");
+List<Row> rows = new ArrayList<>();
+List<PravaahIssue> issues = new ArrayList<>();
+
+String line;
+int rowNumber = 1;
+while ((line = br.readLine()) != null) {
+    String[] cells = line.split(","); // breaks on quoted commas
+    String email = find(cells, headers, "E-mail Address", "email", "mail").trim();
+    if (!email.contains("@")) {
+        issues.add(PravaahIssue.error("invalid_email", "Bad email", rowNumber, "email", email, "email"));
+        continue;
+    }
+    // parse numbers, normalize booleans, handle defaults, write rejection report...
+    rowNumber++;
+}
+```
+
+### After: Pravaah
 
 ```java
 import io.github.beingmartinbmc.pravaah.*;
@@ -46,6 +79,27 @@ Typed output. Fuzzy headers. Coercion. Row-numbered issues. No `String.split`, n
 
 ---
 
+## Why Pravaah Is Different
+
+- No Apache POI dependency, even for `.xls`.
+- One pipeline for CSV, XLS, XLSX, and JSON.
+- Validation and rejection reporting are built in, not bolted on after parsing.
+- CSV has a direct count path for huge files.
+- Java 8 compatible, with Java 11/17 runtime overlays in the same JAR.
+
+### Why Not Just Use Existing Libraries?
+
+| Problem | Typical Approach | Pravaah |
+| --- | --- | --- |
+| CSV parsing | Commons CSV, OpenCSV, uniVocity | Built in |
+| Excel reading | Apache POI | Built in, no runtime dependency |
+| Schema validation | Custom code | Declarative schema |
+| Header cleanup | Manual aliases | Fuzzy headers |
+| Error reporting | Hand-written rejection list | Row-numbered issues |
+| Multiple formats | Separate APIs | One pipeline |
+
+---
+
 ## The Problem
 
 You receive a spreadsheet from a customer. It might be CSV, old Excel `.xls`, modern `.xlsx`, or JSON. Headers are inconsistent, emails are invalid, numbers arrive as strings, and operations needs a rejection report.
@@ -62,6 +116,31 @@ Typical Java import code quickly becomes:
 - error reporting
 
 Pravaah keeps that workflow in one library.
+
+---
+
+## Example: Customer Upload
+
+Input columns:
+
+- `"E-mail Address"`
+- `" Total "`
+- invalid email rows
+- negative or malformed totals
+
+Pravaah output:
+
+- normalized `email` header
+- trimmed values
+- typed `double` totals
+- valid rows for import
+- rejection report with row number, column, expected type, and raw value
+
+```text
+severity,code,message,rowNumber,column,expected,rawValue
+error,invalid_type,email must be email,14,email,email,not-an-email
+error,invalid_value,total cannot be negative,203,total,number,-50.00
+```
 
 ---
 
@@ -100,6 +179,14 @@ Requires Java 8+. Build uses a multi-release JAR so newer JVMs automatically loa
 - Java projects that want CSV/XLS/XLSX ingestion without a runtime dependency stack.
 
 If you need workbook editing, charts, macros, styling fidelity, pivot tables, or advanced Excel authoring, use Apache POI. Pravaah treats spreadsheets as data.
+
+---
+
+## When Not To Use Pravaah
+
+- You need Excel styling, charts, macros, pivot tables, or arbitrary workbook editing. Use Apache POI.
+- You need distributed processing across a cluster. Use Apache Spark or Flink.
+- You only need to read one tiny CSV with no validation. Plain Java may be enough.
 
 ---
 
@@ -151,7 +238,7 @@ This uses the direct CSV scanner count sink. `Pravaah.read(...).collect()` mater
 
 ---
 
-## Core Capabilities
+## Core Focus
 
 - CSV parser with quoted fields, escaped quotes, embedded newlines, CRLF, custom delimiters, and direct count scans.
 - XLS read support through an internal OLE2/BIFF8 parser.
@@ -161,6 +248,9 @@ This uses the direct CSV scanner count sink. `Pravaah.read(...).collect()` mater
 - Cleaning with trim, whitespace normalization, fuzzy header aliases, and deduplication.
 - Issue reports with row numbers, column names, expected types, and raw values.
 - Lazy pipeline API with map, filter, clean, schema, take, collect, drain, process, and write.
+
+## Advanced Features
+
 - Formula engine, SQL-like queries, dataset diffing, joins, and plugin extension points.
 
 ---
@@ -250,17 +340,104 @@ List<Row> enriched = Pravaah.joinRows(orders, customers, "customerId");
 
 ## Benchmarks
 
-Every number below was measured locally with the current Java implementation, JDK 17, Apple Silicon, best observed run after warmup. The CSV files are the same benchmark files used by the Sheetra README.
+Every number below was measured locally with the current Java implementation on Apple Silicon with `-Xmx6g`. Each workload was warmed up once, then measured twice; the table reports the best observed time. Row counts are data rows, excluding the header row where applicable.
 
-### CSV Read
+### Benchmark Notes
 
-| Workload | Size | Rows | Direct count | Collect rows |
-| --- | ---: | ---: | ---: | ---: |
-| `MOCK_DATA.csv` | 498 KB | 1,000 | 1 ms | 1 ms |
-| `Crime_Data_from_2020_to_2024.csv` | 244 MB | 1,004,894 | 417 ms | 1.06 s |
-| `geographic-units...2025.csv` | 145 MB | 7,046,063 | 450 ms | 1.30 s |
+- Same dataset used across all libraries for each workload.
+- JVM warmed before measurement.
+- Best observed run reported after warmup.
+- CSV competitors use their standard header-aware parsing APIs.
+- XLS/XLSX competitors use Apache POI `WorkbookFactory` and EasyExcel sheet readers.
+- Output was verified against competitors by row count and normalized row-value hashes.
 
-Direct count uses `CsvReader.drainCount(...)`. Collect rows uses `Pravaah.read(...).collect()`.
+### CSV Read/Count
+
+CSV workloads are benchmarked against CSV competitors: uniVocity, Apache Commons CSV, OpenCSV, and Jackson CSV. Pravaah uses the direct count path, `CsvReader.drainCount(...)`, which parses CSV records without materializing `Row` objects.
+
+```text
+CSV: 7,046,063 rows, 145MB on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+Pravaah     ■■■■■■■                         330ms
+uniVocity   ■■■■■■■■                        407ms
+Commons CSV ■■■■■■■■■■■■■■■■■■■■          1.00s
+Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■■      1.19s
+OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■  1.40s
+
+CSV: 1,004,894 rows, 244MB on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+Pravaah     ■■■■■■■■■■                      348ms
+uniVocity   ■■■■■■■■■■                      351ms
+Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■       853ms
+Commons CSV ■■■■■■■■■■■■■■■■■■■■■■■■      888ms
+OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■   986ms
+```
+
+#### JDK 8
+
+| Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 498 KB | 1,000 | 3 ms | 2 ms | 2 ms | 5 ms | 2 ms |
+| CSV | 244 MB | 1,004,894 | 403 ms | 312 ms | 862 ms | 763 ms | 718 ms |
+| CSV | 145 MB | 7,046,063 | 341 ms | 390 ms | 814 ms | 804 ms | 827 ms |
+
+#### JDK 11
+
+| Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 498 KB | 1,000 | 4 ms | 4 ms | 2 ms | 6 ms | 4 ms |
+| CSV | 244 MB | 1,004,894 | 405 ms | 376 ms | 929 ms | 898 ms | 955 ms |
+| CSV | 145 MB | 7,046,063 | 363 ms | 458 ms | 1.15 s | 1.27 s | 1.21 s |
+
+#### JDK 17
+
+| Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CSV | 498 KB | 1,000 | 4 ms | 2 ms | 2 ms | 5 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 348 ms | 351 ms | 888 ms | 986 ms | 853 ms |
+| CSV | 145 MB | 7,046,063 | 330 ms | 407 ms | 1.00 s | 1.40 s | 1.19 s |
+
+### Spreadsheet Read
+
+Spreadsheet workloads are benchmarked against corresponding spreadsheet competitors: Apache POI and EasyExcel. Pravaah materializes rows through the XLS/XLSX readers.
+
+```text
+XLSX: 35,808 rows, 1.5MB on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+Pravaah   ■■■■■                           96ms
+EasyExcel ■■■■■■■                         142ms
+POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    513ms
+
+XLS: 65,535 rows, 4.8MB on JDK 17 - time (lower is better)
+──────────────────────────────────────────────────────────────
+Pravaah   ■■■■■■                          43ms
+EasyExcel ■■■■■■■■■■■■                    83ms
+POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■    183ms
+```
+
+#### JDK 8
+
+| Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| XLSX | 244 KB | 1,000 | 19 ms | 50 ms | 21 ms |
+| XLSX | 1.5 MB | 35,808 | 96 ms | 408 ms | 133 ms |
+| XLS | 4.8 MB | 65,535 | 52 ms | 160 ms | 67 ms |
+
+#### JDK 11
+
+| Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| XLSX | 244 KB | 1,000 | 26 ms | 81 ms | 26 ms |
+| XLSX | 1.5 MB | 35,808 | 120 ms | 554 ms | 147 ms |
+| XLS | 4.8 MB | 65,535 | 46 ms | 210 ms | 90 ms |
+
+#### JDK 17
+
+| Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| XLSX | 244 KB | 1,000 | 20 ms | 63 ms | 21 ms |
+| XLSX | 1.5 MB | 35,808 | 96 ms | 513 ms | 142 ms |
+| XLS | 4.8 MB | 65,535 | 43 ms | 183 ms | 83 ms |
 
 ### Format Coverage
 
