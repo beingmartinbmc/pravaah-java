@@ -83,6 +83,11 @@ public class PravaahPipeline {
 
     public ProcessStats write(String destination, WriteOptions options) throws IOException {
         List<Row> rows = collect();
+        if (options.getSchema() != null) {
+            ValidationMode mode = options.getValidation() != null ? options.getValidation() : ValidationMode.FAIL_FAST;
+            ProcessResult result = SchemaValidator.validateRows(rows, options.getSchema(), mode, options.getCleaning());
+            rows = result.getRows();
+        }
         ProcessStats stats = PerfUtils.createStats();
         stats.setRowsProcessed(rows.size());
         stats.setRowsWritten(rows.size());
@@ -122,6 +127,11 @@ public class PravaahPipeline {
                 Set<String> seen = new HashSet<>();
                 for (Row row : rows) {
                     Row cleaned = SchemaValidator.cleanRow(row, schemaOp.cleaning);
+                    if (schemaOp.cleaning != null && schemaOp.cleaning.isDropBlankRows()
+                            && SchemaValidator.isBlankRow(cleaned)) {
+                        rowNumber++;
+                        continue;
+                    }
                     if (schemaOp.cleaning != null && SchemaValidator.isDuplicate(cleaned,
                             schemaOp.cleaning.getDedupeKey(), seen)) {
                         rowNumber++;
@@ -152,6 +162,9 @@ public class PravaahPipeline {
                 Set<String> seen = new HashSet<>();
                 for (Row row : rows) {
                     Row cleaned = SchemaValidator.cleanRow(row, cleanOp.options);
+                    if (cleanOp.options.isDropBlankRows() && SchemaValidator.isBlankRow(cleaned)) {
+                        continue;
+                    }
                     if (cleanOp.options.getDedupeKey() != null
                             && SchemaValidator.isDuplicate(cleaned, cleanOp.options.getDedupeKey(), seen)) {
                         continue;

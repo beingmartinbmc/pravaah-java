@@ -55,6 +55,9 @@ jobs:
       - name: Verify release build
         run: mvn -B --no-transfer-progress -P central-release -Dgpg.skip=true clean verify
 
+      - name: Check test coverage >= 90%
+        run: mvn -B --no-transfer-progress jacoco:check
+
       - name: Upload release artifact for runtime checks
         uses: actions/upload-artifact@v4
         with:

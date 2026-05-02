@@ -26,40 +26,52 @@ public final class XlsxWriter {
     }
 
     public static void writeWorkbook(Workbook book, String destination, WriteOptions options) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(destination)) {
+            writeWorkbook(book, fos, options);
+        }
+    }
+
+    public static void writeWorkbook(Workbook book, OutputStream output, WriteOptions options) throws IOException {
         List<Worksheet> sheets = book.getSheets();
         if (sheets.isEmpty()) {
             sheets = new ArrayList<>();
             sheets.add(new Worksheet(options.getSheetName() != null ? options.getSheetName() : "Sheet1"));
         }
 
-        try (FileOutputStream fos = new FileOutputStream(destination);
-             ZipOutputStream zos = new ZipOutputStream(fos)) {
-            zos.setLevel(1);
-            writeEntry(zos, "[Content_Types].xml", contentTypesXml(sheets));
-            writeEntry(zos, "_rels/.rels", rootRelsXml());
-            writeEntry(zos, "docProps/app.xml", appXml(sheets));
-            writeEntry(zos, "docProps/core.xml", coreXml(book.getProperties()));
-            writeEntry(zos, "xl/workbook.xml", workbookXml(sheets));
-            writeEntry(zos, "xl/_rels/workbook.xml.rels", workbookRelsXml(sheets));
-            writeEntry(zos, "xl/styles.xml", stylesXml());
+        ZipOutputStream zos = new ZipOutputStream(output);
+        zos.setLevel(1);
+        writeEntry(zos, "[Content_Types].xml", contentTypesXml(sheets));
+        writeEntry(zos, "_rels/.rels", rootRelsXml());
+        writeEntry(zos, "docProps/app.xml", appXml(sheets));
+        writeEntry(zos, "docProps/core.xml", coreXml(book.getProperties()));
+        writeEntry(zos, "xl/workbook.xml", workbookXml(sheets));
+        writeEntry(zos, "xl/_rels/workbook.xml.rels", workbookRelsXml(sheets));
+        writeEntry(zos, "xl/styles.xml", stylesXml());
 
-            for (int i = 0; i < sheets.size(); i++) {
-                Worksheet sheet = sheets.get(i);
-                List<String> headers = options.getHeaders();
-                if (headers == null) headers = inferHeaders(sheet.getRows());
-                writeWorksheetEntry(zos, "xl/worksheets/sheet" + (i + 1) + ".xml", sheet, headers);
-            }
+        for (int i = 0; i < sheets.size(); i++) {
+            Worksheet sheet = sheets.get(i);
+            List<String> headers = options.getHeaders();
+            if (headers == null) headers = inferHeaders(sheet.getRows());
+            writeWorksheetEntry(zos, "xl/worksheets/sheet" + (i + 1) + ".xml", sheet, headers);
         }
+        zos.finish();
+        zos.flush();
     }
 
     public static void writeRows(List<Row> rows, String destination, WriteOptions options) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(destination)) {
+            writeRows(rows, fos, options);
+        }
+    }
+
+    public static void writeRows(List<Row> rows, OutputStream output, WriteOptions options) throws IOException {
         String sheetName = options.getSheetName() != null ? options.getSheetName() : "Sheet1";
         List<String> headers = options.getHeaders();
         if (headers == null) headers = inferHeaders(rows);
 
         Worksheet ws = new Worksheet(sheetName, rows);
         Workbook wb = new Workbook(new ArrayList<>(Arrays.asList(ws)));
-        writeWorkbook(wb, destination, options);
+        writeWorkbook(wb, output, options);
     }
 
     private static void writeWorksheetEntry(ZipOutputStream zos, String name, Worksheet sheet,

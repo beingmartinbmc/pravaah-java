@@ -2,8 +2,10 @@ package io.github.beingmartinbmc.pravaah;
 
 import io.github.beingmartinbmc.pravaah.csv.CsvReader;
 import io.github.beingmartinbmc.pravaah.csv.CsvWriter;
+import io.github.beingmartinbmc.pravaah.internal.json.JsonRowWriter;
 import io.github.beingmartinbmc.pravaah.diff.DiffEngine;
 import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
+import io.github.beingmartinbmc.pravaah.mapping.*;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
 import io.github.beingmartinbmc.pravaah.plugin.PluginRegistry;
 import io.github.beingmartinbmc.pravaah.plugin.PravaahPlugin;
@@ -15,10 +17,12 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.*;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 
@@ -2176,6 +2180,402 @@ class PravaahTest {
         assertEquals("id", SchemaValidator.normalizeHeader("  ID  "));
     }
 
+    // ====================== New ingestion APIs ======================
+
+    @Test
+    void schemaRegexOneOfAndRange() {
+        SchemaDefinition schema = new SchemaDefinition()
+                .field("sku", Schema.regex("SKU-\\d{3}"))
+                .field("status", Schema.oneOf("NEW", "DONE"))
+                .field("age", Schema.number().range(0, 120));
+
+        ProcessResult valid = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("sku", "SKU-123", "status", "DONE", "age", "42")),
+                schema, ValidationMode.COLLECT, null);
+        assertEquals(1, valid.getRows().size());
+
+        ProcessResult invalid = SchemaValidator.validateRows(
+                Collections.singletonList(Row.of("sku", "BAD", "status", "OPEN", "age", "150")),
+                schema, ValidationMode.COLLECT, null);
+        assertEquals(3, invalid.getIssues().size());
+    }
+
+    @Test
+    void strictHeadersReportMissingAndUnexpectedHeaders() throws Exception {
+        byte[] csv = "email,extra\nada@example.com,x\n".getBytes(StandardCharsets.UTF_8);
+        List<PravaahIssue> callbacks = new ArrayList<>();
+
+        ProcessResult result = Pravaah.parseDetailed(csv,
+                SchemaDefinition.of("email", Schema.email(), "age", Schema.number()),
+                ReadOptions.defaults()
+                        .format(PravaahFormat.CSV)
+                        .strictHeaders(true)
+                        .validation(ValidationMode.COLLECT)
+                        .onIssue(callbacks::add));
+
+        assertTrue(result.getIssues().stream().anyMatch(i -> "missing_header".equals(i.getCode())));
+        assertTrue(result.getIssues().stream().anyMatch(i -> "unexpected_header".equals(i.getCode())));
+        assertFalse(callbacks.isEmpty());
+    }
+
+    @Test
+    void dropBlankRowsSkipsSpreadsheetStyleBlankRows() {
+        List<Row> rows = Arrays.asList(
+                Row.of("id", ""),
+                Row.of("id", "1"),
+                Row.of("id", "   "));
+
+        List<Row> cleaned = SchemaValidator.cleanRows(rows, CleaningOptions.defaults().dropBlankRows(true));
+        assertEquals(1, cleaned.size());
+        assertEquals("1", cleaned.get(0).get("id"));
+    }
+
+    @Test
+    void streamCsvRowsWithProgress() throws Exception {
+        String file = tempDir.resolve("stream.csv").toString();
+        Files.write(Paths.get(file), "id\n1\n2\n".getBytes(StandardCharsets.UTF_8));
+        List<Integer> progress = new ArrayList<>();
+        List<Row> rows = new ArrayList<>();
+
+        ProcessStats stats = Pravaah.stream(file,
+                ReadOptions.defaults().format(PravaahFormat.CSV).onProgress(progress::add),
+                (row, rowNumber) -> rows.add(row));
+
+        assertEquals(2, stats.getRowsProcessed());
+        assertEquals(2, rows.size());
+        assertEquals(Arrays.asList(1, 2), progress);
+    }
+
+    @Test
+    void streamCsvWithSchemaEmitsOnlyValidRowsAndIssues() throws Exception {
+        byte[] csv = "email\nbad\nada@example.com\n".getBytes(StandardCharsets.UTF_8);
+        List<Row> rows = new ArrayList<>();
+        List<PravaahIssue> issues = new ArrayList<>();
+
+        ProcessStats stats = Pravaah.stream(csv,
+                SchemaDefinition.of("email", Schema.email()),
+                ReadOptions.defaults().format(PravaahFormat.CSV).validation(ValidationMode.COLLECT).onIssue(issues::add),
+                (row, rowNumber) -> rows.add(row));
+
+        assertEquals(2, stats.getRowsProcessed());
+        assertEquals(1, rows.size());
+        assertEquals(1, issues.size());
+    }
+
+    @Test
+    void annotationBasedPojoMapping() throws Exception {
+        String file = tempDir.resolve("customers.csv").toString();
+        Files.write(Paths.get(file), "E-mail,signup,active,total\nada@example.com,2024/06/01,yes,42.5\n".getBytes(StandardCharsets.UTF_8));
+
+        List<CustomerUpload> customers = Pravaah.read(file, CustomerUpload.class,
+                ReadOptions.defaults().format(PravaahFormat.CSV).inferTypes(true));
+
+        assertEquals(1, customers.size());
+        assertEquals("ada@example.com", customers.get(0).email);
+        assertEquals(LocalDate.of(2024, 6, 1), customers.get(0).signup);
+        assertTrue(customers.get(0).active);
+        assertEquals(42.5, customers.get(0).total, 0.001);
+    }
+
+    @Test
+    void readAllSheetsReturnsNamedSheets() throws Exception {
+        String file = tempDir.resolve("all-sheets.xlsx").toString();
+        Workbook wb = new Workbook(Arrays.asList(
+                new Worksheet("Leads", Collections.singletonList(Row.of("name", "Ada"))),
+                new Worksheet("Finance", Collections.singletonList(Row.of("amount", 10)))
+        ));
+        XlsxWriter.writeWorkbook(wb, file);
+
+        Map<String, List<Row>> sheets = Pravaah.readAllSheets(file, ReadOptions.defaults().format(PravaahFormat.XLSX));
+        assertEquals(2, sheets.size());
+        assertEquals("Ada", sheets.get("Leads").get(0).get("name"));
+        assertEquals(10, sheets.get("Finance").get(0).get("amount"));
+    }
+
+    @Test
+    void csvAutoDetectsDelimiterQuoteAndUtf16Bom() throws Exception {
+        byte[] body = "name;note\n'Ada';'hello;world'\n".getBytes(StandardCharsets.UTF_16LE);
+        byte[] data = new byte[body.length + 2];
+        data[0] = (byte) 0xFF;
+        data[1] = (byte) 0xFE;
+        System.arraycopy(body, 0, data, 2, body.length);
+
+        List<Row> rows = Pravaah.read(data, ReadOptions.defaults()
+                .format(PravaahFormat.CSV)
+                .autoDetectDelimiter(true)
+                .autoDetectQuote(true))
+                .collect();
+
+        assertEquals(1, rows.size());
+        assertEquals("Ada", rows.get(0).get("name"));
+        assertEquals("hello;world", rows.get(0).get("note"));
+    }
+
+    @Test
+    void writeRowsToOutputStream() throws Exception {
+        ByteArrayOutputStream csv = new ByteArrayOutputStream();
+        Pravaah.write(Collections.singletonList(Row.of("id", 1)), csv,
+                WriteOptions.defaults().format(PravaahFormat.CSV));
+        assertTrue(csv.toString("UTF-8").contains("id"));
+
+        ByteArrayOutputStream json = new ByteArrayOutputStream();
+        Pravaah.write(Collections.singletonList(Row.of("id", 1)), json,
+                WriteOptions.defaults().format(PravaahFormat.JSON));
+        assertTrue(json.toString("UTF-8").contains("\"id\""));
+
+        ByteArrayOutputStream xlsx = new ByteArrayOutputStream();
+        Pravaah.write(Collections.singletonList(Row.of("id", 1)), xlsx,
+                WriteOptions.defaults().format(PravaahFormat.XLSX));
+        assertTrue(xlsx.size() > 0);
+    }
+
+    @Test
+    void writeSchemaValidationRejectsInvalidRows() {
+        assertThrows(PravaahValidationException.class, () ->
+                Pravaah.write(Collections.singletonList(Row.of("email", "bad")),
+                        new ByteArrayOutputStream(),
+                        WriteOptions.defaults()
+                                .format(PravaahFormat.CSV)
+                                .schema(SchemaDefinition.of("email", Schema.email()))));
+    }
+
+    @Test
+    void newReadOptionsChaining() {
+        ReadOptions options = ReadOptions.defaults()
+                .quote("'")
+                .autoDetectDelimiter(true)
+                .autoDetectEncoding(false)
+                .autoDetectQuote(true)
+                .charset(StandardCharsets.UTF_16LE)
+                .strictHeaders(true)
+                .onProgress(count -> {})
+                .onIssue(issue -> {});
+
+        assertEquals("'", options.getQuote());
+        assertTrue(options.isAutoDetectDelimiter());
+        assertFalse(options.isAutoDetectEncoding());
+        assertTrue(options.isAutoDetectQuote());
+        assertEquals(StandardCharsets.UTF_16LE, options.getCharset());
+        assertTrue(options.isStrictHeaders());
+        assertNotNull(options.getProgressConsumer());
+        assertNotNull(options.getIssueConsumer());
+
+        ReadOptions byName = ReadOptions.defaults().charset("UTF-8");
+        assertEquals(StandardCharsets.UTF_8, byName.getCharset());
+    }
+
+    @Test
+    void newWriteOptionsChaining() {
+        SchemaDefinition schema = SchemaDefinition.of("email", Schema.email());
+        CleaningOptions cleaning = CleaningOptions.defaults().trim(true);
+        WriteOptions options = WriteOptions.defaults()
+                .schema(schema)
+                .validation(ValidationMode.COLLECT)
+                .cleaning(cleaning);
+
+        assertSame(schema, options.getSchema());
+        assertEquals(ValidationMode.COLLECT, options.getValidation());
+        assertSame(cleaning, options.getCleaning());
+    }
+
+    @Test
+    void schemaFactoryOverloadsAndFieldMetadata() {
+        FieldDefinition regex = Schema.regex(java.util.regex.Pattern.compile("[A-Z]+"));
+        FieldDefinition oneOf = Schema.oneOf(Arrays.asList("A", "B"));
+        FieldDefinition range = Schema.range(1, 3);
+
+        assertEquals(FieldKind.REGEX, regex.getKind());
+        assertEquals("[A-Z]+", regex.getRegexSource());
+        assertTrue(oneOf.getAllowedValues().contains("A"));
+        assertEquals(1.0, range.getMin());
+        assertEquals(3.0, range.getMax());
+    }
+
+    @Test
+    void xlsxHelperModelsExposeConfiguredValues() {
+        ColumnDefinition column = new ColumnDefinition("Name", 20).key("name").header("Full Name").width(24);
+        DataValidation validation = new DataValidation("A2:A10", "list", "\"A,B\"");
+        TableDefinition table = new TableDefinition("People", "A1:B2", Arrays.asList("name", "score"));
+        FreezePane pane = new FreezePane().xSplit(1).ySplit(2).topLeftCell("B3");
+        FormulaCell formula = new FormulaCell("SUM(A1:A2)");
+        Worksheet sheet = new Worksheet("Sheet");
+        Workbook workbook = new Workbook();
+
+        sheet.getColumns().add(column);
+        sheet.getValidations().add(validation);
+        sheet.getTables().add(table);
+        sheet.getMerges().add("A1:B1");
+        sheet.setFrozen(pane);
+        workbook.getSheets().add(sheet);
+        workbook.getProperties().put("creator", "test");
+
+        assertEquals("Full Name", column.getHeader());
+        assertEquals("name", column.getKey());
+        assertEquals(24, column.getWidth());
+        assertEquals("A2:A10", validation.getRange());
+        assertEquals("list", validation.getType());
+        assertEquals("\"A,B\"", validation.getFormula());
+        assertEquals("People", table.getName());
+        assertEquals("A1:B2", table.getRange());
+        assertEquals(2, table.getColumns().size());
+        assertEquals(Integer.valueOf(1), pane.getXSplit());
+        assertEquals(Integer.valueOf(2), pane.getYSplit());
+        assertEquals("B3", pane.getTopLeftCell());
+        assertEquals("SUM(A1:A2)", formula.getFormula());
+        assertNull(formula.getResult());
+        assertTrue(formula.toString().contains("SUM"));
+        assertEquals(formula, new FormulaCell("SUM(A1:A2)"));
+        assertEquals(formula.hashCode(), new FormulaCell("SUM(A1:A2)").hashCode());
+        assertNotEquals(formula, new FormulaCell("SUM(A1:A3)"));
+        assertEquals(sheet, workbook.getSheets().get(0));
+        assertEquals("test", workbook.getProperties().get("creator"));
+    }
+
+    @Test
+    void annotationMapperSupportsCommonScalarTypesAndFailures() {
+        Row row = Row.of(
+                "id", "7",
+                "longValue", "8",
+                "floatValue", "1.5",
+                "amount", "12.34",
+                "kind", "DONE",
+                "createdAt", "2024-06-01T10:15:30",
+                "instant", "2024-06-01T10:15:30Z",
+                "enabled", "1");
+
+        ScalarUpload upload = io.github.beingmartinbmc.pravaah.mapping.PojoMapper.mapRow(row, ScalarUpload.class);
+        assertEquals(7, upload.id);
+        assertEquals(8L, upload.longValue);
+        assertEquals(1.5f, upload.floatValue, 0.001f);
+        assertEquals(new BigDecimal("12.34"), upload.amount);
+        assertEquals(Status.DONE, upload.kind);
+        assertEquals(LocalDateTime.of(2024, 6, 1, 10, 15, 30), upload.createdAt);
+        assertEquals(Instant.parse("2024-06-01T10:15:30Z"), upload.instant);
+        assertTrue(upload.enabled);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                io.github.beingmartinbmc.pravaah.mapping.PojoMapper.mapRow(new Row(), RequiredPojo.class));
+        assertThrows(IllegalArgumentException.class, () ->
+                io.github.beingmartinbmc.pravaah.mapping.PojoMapper.mapRow(Row.of("enabled", "maybe"), BoolPojo.class));
+    }
+
+    @Test
+    void additionalPravaahEntryPointsForCoverage() throws Exception {
+        byte[] csv = "E-mail,signup,active,total\nada@example.com,2024/06/01,yes,42.5\n".getBytes(StandardCharsets.UTF_8);
+        List<CustomerUpload> typed = Pravaah.read(csv, CustomerUpload.class,
+                ReadOptions.defaults().format(PravaahFormat.CSV).inferTypes(true));
+        assertEquals("ada@example.com", typed.get(0).email);
+
+        String csvFile = tempDir.resolve("sheet1.csv").toString();
+        Files.write(Paths.get(csvFile), "id\n1\n".getBytes(StandardCharsets.UTF_8));
+        Map<String, List<Row>> csvSheets = Pravaah.readAllSheets(csvFile,
+                ReadOptions.defaults().format(PravaahFormat.CSV));
+        assertEquals(1, csvSheets.get("Sheet1").size());
+
+        byte[] json = "[{\"id\":1},{\"id\":2}]".getBytes(StandardCharsets.UTF_8);
+        Map<String, List<Row>> jsonSheets = Pravaah.readAllSheets(json,
+                ReadOptions.defaults().format(PravaahFormat.JSON));
+        assertEquals(2, jsonSheets.get("Sheet1").size());
+
+        String writeFile = tempDir.resolve("validated-write.csv").toString();
+        ProcessStats stats = Pravaah.write(Collections.singletonList(Row.of("email", " ada@example.com ")), writeFile,
+                WriteOptions.defaults()
+                        .format(PravaahFormat.CSV)
+                        .schema(SchemaDefinition.of("email", Schema.email()))
+                        .cleaning(CleaningOptions.defaults().trim(true)));
+        assertEquals(1, stats.getRowsWritten());
+    }
+
+    @Test
+    void streamNonCsvAndSchemaBranches() throws Exception {
+        byte[] json = "[{\"id\":1},{\"id\":\"bad\"}]".getBytes(StandardCharsets.UTF_8);
+        List<Row> rawRows = new ArrayList<>();
+        ProcessStats rawStats = Pravaah.stream(json,
+                ReadOptions.defaults().format(PravaahFormat.JSON).onProgress(count -> {}),
+                (row, rowNumber) -> rawRows.add(row));
+        assertEquals(2, rawStats.getRowsProcessed());
+        assertEquals(2, rawRows.size());
+
+        List<Row> validRows = new ArrayList<>();
+        List<PravaahIssue> issues = new ArrayList<>();
+        ProcessStats schemaStats = Pravaah.stream(json,
+                SchemaDefinition.of("id", Schema.number()),
+                ReadOptions.defaults()
+                        .format(PravaahFormat.JSON)
+                        .validation(ValidationMode.COLLECT)
+                        .onIssue(issues::add)
+                        .cleaning(CleaningOptions.defaults().dropBlankRows(true)),
+                (row, rowNumber) -> validRows.add(row));
+        assertEquals(2, schemaStats.getRowsProcessed());
+        assertEquals(1, validRows.size());
+        assertEquals(1, issues.size());
+
+        List<Row> skippedRows = new ArrayList<>();
+        Pravaah.stream(json,
+                SchemaDefinition.of("id", Schema.number()),
+                ReadOptions.defaults().format(PravaahFormat.JSON).validation(ValidationMode.SKIP),
+                (row, rowNumber) -> skippedRows.add(row));
+        assertEquals(1, skippedRows.size());
+    }
+
+    @Test
+    void streamingValidatorStrictHeaderFailFastAndDedupe() {
+        byte[] missingHeader = "email\nada@example.com\n".getBytes(StandardCharsets.UTF_8);
+        assertThrows(PravaahValidationException.class, () ->
+                Pravaah.stream(missingHeader,
+                        SchemaDefinition.of("email", Schema.email(), "age", Schema.number()),
+                        ReadOptions.defaults()
+                                .format(PravaahFormat.CSV)
+                                .strictHeaders(true)
+                                .validation(ValidationMode.FAIL_FAST),
+                        (row, rowNumber) -> {}));
+
+        byte[] dupes = "id,email\n1,ada@example.com\n1,ada@example.com\n2,grace@example.com\n".getBytes(StandardCharsets.UTF_8);
+        List<Row> rows = new ArrayList<>();
+        assertDoesNotThrow(() ->
+                Pravaah.stream(dupes,
+                        SchemaDefinition.of("id", Schema.number(), "email", Schema.email()),
+                        ReadOptions.defaults()
+                                .format(PravaahFormat.CSV)
+                                .cleaning(CleaningOptions.defaults().dedupeKey("id")),
+                        (row, rowNumber) -> rows.add(row)));
+        assertEquals(2, rows.size());
+    }
+
+    static class CustomerUpload {
+        @Required
+        @Column("E-mail")
+        String email;
+
+        @DateFormat("yyyy/MM/dd")
+        LocalDate signup;
+
+        boolean active;
+        double total;
+    }
+
+    enum Status { NEW, DONE }
+
+    static class ScalarUpload {
+        int id;
+        long longValue;
+        float floatValue;
+        BigDecimal amount;
+        Status kind;
+        LocalDateTime createdAt;
+        Instant instant;
+        boolean enabled;
+    }
+
+    static class RequiredPojo {
+        @Required
+        String missing;
+    }
+
+    static class BoolPojo {
+        boolean enabled;
+    }
+
     private static void assertRowsExactly(List<Row> actual, Row... expected) {
         assertEquals(Arrays.asList(expected), actual);
     }
@@ -2482,5 +2882,114 @@ class PravaahTest {
         FormulaValue(double value) {
             this.value = value;
         }
+    }
+
+    // ====================== JSON Escaping ======================
+
+    @Test
+    void jsonEscapeControlCharsRoundTrips() throws Exception {
+        Row row = Row.of("msg", "line1\nline2\ttab\r\nend", "bs", "back\\slash");
+        String json = JsonRowWriter.rowsToJson(Collections.singletonList(row));
+        assertTrue(json.contains("\\n"), "should contain escaped newline");
+        assertTrue(json.contains("\\t"), "should contain escaped tab");
+        assertTrue(json.contains("\\\\"), "should contain escaped backslash");
+        assertFalse(json.contains("\n\""), "raw newline inside value");
+
+        List<Row> parsed = Pravaah.parseJsonRows(json);
+        assertEquals(1, parsed.size());
+        assertEquals("line1\nline2\ttab\r\nend", parsed.get(0).get("msg"));
+        assertEquals("back\\slash", parsed.get(0).get("bs"));
+    }
+
+    @Test
+    void jsonEscapeQuotesAndUnicodeControlChar() {
+        Row row = Row.of("q", "say \"hi\"", "ctrl", "bell\u0007here");
+        String json = JsonRowWriter.rowToJson(row);
+        assertTrue(json.contains("\\\"hi\\\""));
+        assertTrue(json.contains("\\u0007"));
+
+        List<Row> parsed = Pravaah.parseJsonRows("[" + json + "]");
+        assertEquals("say \"hi\"", parsed.get(0).get("q"));
+        assertEquals("bell\u0007here", parsed.get(0).get("ctrl"));
+    }
+
+    @Test
+    void jsonWriteToOutputStreamRoundTrips() throws Exception {
+        List<Row> rows = Arrays.asList(Row.of("a", "hello\tworld"), Row.of("a", "line\nbreak"));
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        JsonRowWriter.writeRows(rows, baos);
+        List<Row> parsed = Pravaah.parseJsonRows(baos.toString("UTF-8"));
+        assertEquals(2, parsed.size());
+        assertEquals("hello\tworld", parsed.get(0).get("a"));
+        assertEquals("line\nbreak", parsed.get(1).get("a"));
+    }
+
+    // ====================== Write-Side Schema COLLECT Mode ======================
+
+    @Test
+    void writeSideSchemaCollectModeKeepsValidRows() throws Exception {
+        SchemaDefinition schema = SchemaDefinition.of("email", Schema.email());
+        List<Row> rows = Arrays.asList(
+                Row.of("email", "a@b.com"),
+                Row.of("email", "bad"),
+                Row.of("email", "c@d.com"));
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ProcessStats stats = Pravaah.write(rows, baos, WriteOptions.defaults()
+                .format(PravaahFormat.CSV)
+                .schema(schema)
+                .validation(ValidationMode.COLLECT));
+
+        String csv = baos.toString("UTF-8");
+        assertEquals(2, stats.getRowsWritten());
+        assertTrue(csv.contains("a@b.com"));
+        assertTrue(csv.contains("c@d.com"));
+        assertFalse(csv.contains("bad"));
+    }
+
+    // ====================== Streaming CSV Without Auto-Detect ======================
+
+    @Test
+    void streamCsvNoAutoDetectSkipsSampling() throws Exception {
+        String csv = "name,age\nAlice,30\nBob,25\n";
+        List<Row> collected = new ArrayList<>();
+        Pravaah.stream(csv.getBytes(StandardCharsets.UTF_8),
+                ReadOptions.defaults().format(PravaahFormat.CSV),
+                (row, n) -> collected.add(row));
+        assertEquals(2, collected.size());
+        assertEquals("Alice", collected.get(0).get("name"));
+    }
+
+    @Test
+    void streamCsvWithAutoDetectDelimiter() throws Exception {
+        String csv = "name;age\nAlice;30\nBob;25\n";
+        List<Row> collected = new ArrayList<>();
+        Pravaah.stream(csv.getBytes(StandardCharsets.UTF_8),
+                ReadOptions.defaults().format(PravaahFormat.CSV).autoDetectDelimiter(true),
+                (row, n) -> collected.add(row));
+        assertEquals(2, collected.size());
+        assertEquals("30", collected.get(0).get("age"));
+    }
+
+    // ====================== ReadAllSheets CSV/JSON Returns Sheet1 ======================
+
+    @Test
+    void readAllSheetsCsvReturnsSingleSheet1() throws Exception {
+        String csv = "a,b\n1,2\n";
+        Path file = tempDir.resolve("single.csv");
+        Files.write(file, csv.getBytes(StandardCharsets.UTF_8));
+        Map<String, List<Row>> sheets = Pravaah.readAllSheets(file.toString());
+        assertTrue(sheets.containsKey("Sheet1"));
+        assertEquals(1, sheets.get("Sheet1").size());
+    }
+
+    @Test
+    void readAllSheetsJsonReturnsSingleSheet1() throws Exception {
+        Path file = tempDir.resolve("data.json");
+        Files.write(file, "[{\"x\":1}]".getBytes(StandardCharsets.UTF_8));
+        Map<String, List<Row>> sheets = Pravaah.readAllSheets(file.toString(),
+                ReadOptions.defaults().format(PravaahFormat.JSON));
+        assertTrue(sheets.containsKey("Sheet1"));
+        assertEquals(1, sheets.get("Sheet1").size());
     }
 }

@@ -1,7 +1,9 @@
 package io.github.beingmartinbmc.pravaah.schema;
 
 import io.github.beingmartinbmc.pravaah.Row;
+import java.util.*;
 import java.util.function.BiFunction;
+import java.util.regex.Pattern;
 
 public class FieldDefinition {
     private final FieldKind kind;
@@ -10,6 +12,11 @@ public class FieldDefinition {
     private boolean hasDefault;
     private boolean coerce = true;
     private BiFunction<Object, Row, String> validate;
+    private Pattern regex;
+    private String regexSource;
+    private Set<Object> allowedValues;
+    private Double min;
+    private Double max;
 
     public FieldDefinition(FieldKind kind) {
         this.kind = kind;
@@ -29,4 +36,35 @@ public class FieldDefinition {
 
     public BiFunction<Object, Row, String> getValidate() { return validate; }
     public FieldDefinition validate(BiFunction<Object, Row, String> v) { this.validate = v; return this; }
+
+    public Pattern getRegex() { return regex; }
+    public String getRegexSource() { return regexSource; }
+    public FieldDefinition regex(String pattern) {
+        this.regexSource = pattern;
+        this.regex = Pattern.compile(pattern);
+        return this;
+    }
+    public FieldDefinition regex(Pattern pattern) {
+        this.regex = pattern;
+        this.regexSource = pattern == null ? null : pattern.pattern();
+        return this;
+    }
+
+    public Set<Object> getAllowedValues() { return allowedValues; }
+    public FieldDefinition oneOf(Object... values) {
+        this.allowedValues = new LinkedHashSet<>(Arrays.asList(values));
+        return this;
+    }
+    public FieldDefinition oneOf(Collection<?> values) {
+        this.allowedValues = new LinkedHashSet<Object>(values);
+        return this;
+    }
+
+    public Double getMin() { return min; }
+    public Double getMax() { return max; }
+    public FieldDefinition range(double min, double max) {
+        this.min = min;
+        this.max = max;
+        return this;
+    }
 }
