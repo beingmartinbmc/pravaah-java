@@ -162,14 +162,18 @@ CSV uses a direct scanner that can emit to a count-only sink, row materializer, 
 
 ---
 
-## Requirements
+## Install
 
 Requires Java 8+. Build uses a multi-release JAR so newer JVMs automatically load newer runtime internals.
 
-Until a package is published, build from source:
+Maven Central: [`io.github.beingmartinbmc:pravaah-java`](https://central.sonatype.com/artifact/io.github.beingmartinbmc/pravaah-java)
 
-```bash
-mvn package
+```xml
+<dependency>
+    <groupId>io.github.beingmartinbmc</groupId>
+    <artifactId>pravaah-java</artifactId>
+    <version>1.0.0</version>
+</dependency>
 ```
 
 ---
@@ -353,6 +357,50 @@ Every number below was measured locally with the current Java implementation on 
 - CSV competitors use their standard header-aware parsing APIs.
 - XLS/XLSX competitors use Apache POI `WorkbookFactory` and EasyExcel sheet readers.
 - Output was verified against competitors by row count and normalized row-value hashes.
+
+### Comparison Graphs
+
+JDK 17 headline workloads, measured in milliseconds. Lower is better.
+
+```mermaid
+xychart-beta
+    title "CSV Read/Count - 7,046,063 rows, 145MB"
+    x-axis ["Pravaah", "uniVocity", "Jackson CSV", "Commons CSV", "OpenCSV"]
+    y-axis "Milliseconds" 0 --> 1500
+    bar [330, 400, 972, 1050, 1420]
+```
+
+```mermaid
+xychart-beta
+    title "Spreadsheet Read - XLSX, 35,808 rows, 1.5MB"
+    x-axis ["Pravaah", "EasyExcel", "Apache POI"]
+    y-axis "Milliseconds" 0 --> 550
+    bar [91, 145, 510]
+```
+
+```mermaid
+xychart-beta
+    title "Spreadsheet Read - XLS, 65,535 rows, 4.8MB"
+    x-axis ["Pravaah", "EasyExcel", "Apache POI"]
+    y-axis "Milliseconds" 0 --> 200
+    bar [46, 77, 176]
+```
+
+```mermaid
+xychart-beta
+    title "CSV Write - 100,000 rows x 10 columns"
+    x-axis ["uniVocity", "Jackson CSV", "Pravaah", "OpenCSV", "Commons CSV"]
+    y-axis "Milliseconds" 0 --> 110
+    bar [25, 29, 33, 34, 97]
+```
+
+```mermaid
+xychart-beta
+    title "XLSX Write - 100,000 rows x 10 columns"
+    x-axis ["Pravaah", "EasyExcel", "Apache POI"]
+    y-axis "Milliseconds" 0 --> 650
+    bar [127, 346, 583]
+```
 
 ### CSV Read/Count
 
