@@ -494,20 +494,20 @@ POI       ■■■■■■■■■■■■■■■■■■■■■■■�
 
 Write workloads use 100,000 generated rows x 10 columns. CSV is compared with CSV writer libraries; XLSX is compared with Apache POI streaming SXSSF and EasyExcel. Pravaah favors write throughput for XLSX ZIP compression, so the XLSX output is larger than EasyExcel's but writes faster in this workload. Legacy `.xls` is read-only in Pravaah, so there is no `.xls` write benchmark.
 
-```text
-CSV write: 100,000 rows, 10 columns on JDK 17 - time (lower is better)
-──────────────────────────────────────────────────────────────
-uniVocity   ■■■■■■■■■■■■■■■■■■■■■■■       25ms
-Jackson CSV ■■■■■■■■■■■■■■■■■■■■■■■■■■    29ms
-Pravaah     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■  33ms
-OpenCSV     ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 34ms
-Commons CSV ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 97ms
+```mermaid
+xychart-beta
+    title "CSV Write - 100,000 rows x 10 columns on JDK 17"
+    x-axis ["uniVocity", "Jackson CSV", "Pravaah", "OpenCSV", "Commons CSV"]
+    y-axis "Milliseconds, lower is better" 0 --> 110
+    bar [25, 29, 33, 34, 97]
+```
 
-XLSX write: 100,000 rows, 10 columns on JDK 17 - time (lower is better)
-──────────────────────────────────────────────────────────────
-Pravaah   ■■■■■■■                         127ms
-EasyExcel ■■■■■■■■■■■■■■■■■■■■            346ms
-POI       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■ 583ms
+```mermaid
+xychart-beta
+    title "XLSX Write - 100,000 rows x 10 columns on JDK 17"
+    x-axis ["Pravaah", "EasyExcel", "Apache POI"]
+    y-axis "Milliseconds, lower is better" 0 --> 650
+    bar [127, 346, 583]
 ```
 
 #### JDK 8
