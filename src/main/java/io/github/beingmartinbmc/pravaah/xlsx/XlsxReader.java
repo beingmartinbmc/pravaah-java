@@ -2,6 +2,7 @@ package io.github.beingmartinbmc.pravaah.xlsx;
 
 import io.github.beingmartinbmc.pravaah.ReadOptions;
 import io.github.beingmartinbmc.pravaah.Row;
+import io.github.beingmartinbmc.pravaah.internal.io.IOUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -11,10 +12,12 @@ import java.util.zip.*;
 
 public final class XlsxReader {
 
+    private static final Pattern INLINE_STRING_T = Pattern.compile("<t\\b[^>]*>([\\s\\S]*?)</t>");
+
     private XlsxReader() {}
 
     public static List<Row> readAll(String filePath, ReadOptions options) throws IOException {
-        return readAll(readBytes(filePath), options);
+        return readAll(IOUtils.readAllBytes(filePath), options);
     }
 
     public static List<Row> readAll(byte[] data, ReadOptions options) throws IOException {
@@ -33,7 +36,7 @@ public final class XlsxReader {
     }
 
     public static Workbook readWorkbook(String filePath, ReadOptions options) throws IOException {
-        return readWorkbook(readBytes(filePath), options);
+        return readWorkbook(IOUtils.readAllBytes(filePath), options);
     }
 
     public static Workbook readWorkbook(byte[] data, ReadOptions options) throws IOException {
@@ -57,44 +60,15 @@ public final class XlsxReader {
         boolean useArrayHeaders = options.getHeaderNames() != null && !options.getHeaderNames().isEmpty();
         boolean headerless = options.getHeaders() != null && !options.getHeaders();
         String[] headers = useArrayHeaders ? options.getHeaderNames().toArray(new String[0]) : null;
+        boolean firstRowIsHeaders = headers == null && !headerless;
 
-        List<Object[]> valueRows = parseSheetDataRows(xml, ss, options);
         List<Row> result = new ArrayList<>();
 
-        for (Object[] values : valueRows) {
-            if (headers == null && !headerless) {
-                headers = new String[values.length];
-                for (int i = 0; i < values.length; i++) {
-                    headers[i] = values[i] != null ? String.valueOf(values[i]) : ("_" + (i + 1));
-                }
-                continue;
-            }
-
-            Row row = new Row();
-            if (headerless) {
-                for (int i = 0; i < values.length; i++) {
-                    if (values[i] != null) row.put("_" + (i + 1), values[i]);
-                    else row.put("_" + (i + 1), values[i]);
-                }
-            } else if (headers != null) {
-                for (int i = 0; i < headers.length; i++) {
-                    row.put(headers[i], i < values.length ? values[i] : null);
-                }
-            }
-            result.add(row);
-        }
-
-        return result;
-    }
-
-    private static List<Object[]> parseSheetDataRows(String xml, LazySharedStrings ss, ReadOptions options) {
-        List<Object[]> rows = new ArrayList<>();
-
         int sdStart = xml.indexOf("<sheetData");
-        if (sdStart == -1) return rows;
+        if (sdStart == -1) return result;
         int sdOpenEnd = xml.indexOf(">", sdStart);
         int sdEnd = xml.indexOf("</sheetData>", sdOpenEnd);
-        if (sdOpenEnd == -1 || sdEnd == -1) return rows;
+        if (sdOpenEnd == -1 || sdEnd == -1) return result;
 
         Integer colCount = parseDimensionColumnCount(xml);
 
@@ -109,19 +83,63 @@ public final class XlsxReader {
             boolean selfClose = xml.charAt(rowOpenEnd - 1) == '/';
             if (selfClose) {
                 cursor = rowOpenEnd + 1;
-                rows.add(new Object[0]);
+                if (firstRowIsHeaders && headers == null) {
+                    headers = new String[0];
+                    firstRowIsHeaders = false;
+                    continue;
+                }
+                result.add(emptyRow(headers, headerless));
                 continue;
             }
 
             int rowEnd = xml.indexOf("</row>", rowOpenEnd);
             if (rowEnd == -1) break;
 
-            String rowXml = xml.substring(rowOpenEnd + 1, rowEnd);
-            rows.add(parseRowCells(rowXml, ss, options, colCount));
+            Object[] values = parseRowCells(xml, rowOpenEnd + 1, rowEnd, ss, options, colCount);
             cursor = rowEnd + 6;
+
+            if (firstRowIsHeaders && headers == null) {
+                headers = new String[values.length];
+                for (int i = 0; i < values.length; i++) {
+                    headers[i] = values[i] != null ? String.valueOf(values[i]) : ("_" + (i + 1));
+                }
+                firstRowIsHeaders = false;
+                continue;
+            }
+
+            result.add(buildRow(values, headers, headerless));
         }
 
-        return rows;
+        return result;
+    }
+
+    private static Row buildRow(Object[] values, String[] headers, boolean headerless) {
+        Row row = new Row(rowMapCapacity(headerless ? values.length : (headers == null ? 0 : headers.length)));
+        if (headerless) {
+            for (int i = 0; i < values.length; i++) {
+                row.put("_" + (i + 1), values[i]);
+            }
+        } else if (headers != null) {
+            int n = headers.length;
+            for (int i = 0; i < n; i++) {
+                row.put(headers[i], i < values.length ? values[i] : null);
+            }
+        }
+        return row;
+    }
+
+    private static Row emptyRow(String[] headers, boolean headerless) {
+        if (headerless || headers == null) {
+            return new Row();
+        }
+        Row row = new Row(rowMapCapacity(headers.length));
+        for (String h : headers) row.put(h, null);
+        return row;
+    }
+
+    private static int rowMapCapacity(int size) {
+        if (size <= 0) return 16;
+        return Math.max(4, (int) (size / 0.75f) + 1);
     }
 
     private static Integer parseDimensionColumnCount(String xml) {
@@ -137,89 +155,119 @@ public final class XlsxReader {
         return cellRefToColumnIndex(parts[1]) + 1;
     }
 
-    private static Object[] parseRowCells(String rowXml, LazySharedStrings ss, ReadOptions options, Integer colCount) {
-        Object[] values;
-        if (colCount != null) {
-            values = new Object[colCount];
-        } else {
-            values = new Object[0];
-        }
+    private static Object[] parseRowCells(String xml, int rowStart, int rowEnd,
+                                           LazySharedStrings ss, ReadOptions options,
+                                           Integer colCount) {
+        Object[] fixed = colCount != null ? new Object[colCount] : null;
+        Object[] dynamic = fixed == null ? new Object[8] : null;
+        int dynamicSize = 0;
 
-        List<Object> dynamicValues = colCount == null ? new ArrayList<>() : null;
-        int cursor = 0;
+        int cursor = rowStart;
         int implicitColumn = 0;
 
-        while (cursor < rowXml.length()) {
-            int cellStart = rowXml.indexOf("<c", cursor);
-            if (cellStart == -1) break;
+        while (cursor < rowEnd) {
+            int cellStart = xml.indexOf("<c", cursor);
+            if (cellStart == -1 || cellStart >= rowEnd) break;
 
-            int cellOpenEnd = rowXml.indexOf(">", cellStart);
-            if (cellOpenEnd == -1) break;
+            int cellOpenEnd = xml.indexOf(">", cellStart);
+            if (cellOpenEnd == -1 || cellOpenEnd >= rowEnd) break;
 
-            String openTag = rowXml.substring(cellStart, cellOpenEnd + 1);
-            String ref = readXmlAttribute(openTag, "r");
-            String type = readXmlAttribute(openTag, "t");
+            String ref = readXmlAttributeRange(xml, cellStart, cellOpenEnd + 1, "r");
+            String type = readXmlAttributeRange(xml, cellStart, cellOpenEnd + 1, "t");
             int columnIndex = ref != null ? cellRefToColumnIndex(ref) : implicitColumn;
             implicitColumn = columnIndex + 1;
 
-            if (openTag.endsWith("/>")) {
-                setValueAt(values, dynamicValues, columnIndex, null);
+            boolean selfClose = xml.charAt(cellOpenEnd - 1) == '/';
+
+            Object cellValue;
+            if (selfClose) {
+                cellValue = null;
                 cursor = cellOpenEnd + 1;
-                continue;
+            } else {
+                int cellEnd = xml.indexOf("</c>", cellOpenEnd);
+                if (cellEnd == -1 || cellEnd >= rowEnd) break;
+                cellValue = decodeCellValueRange(type, xml, cellOpenEnd + 1, cellEnd, ss, options);
+                cursor = cellEnd + 4;
             }
 
-            int cellEnd = rowXml.indexOf("</c>", cellOpenEnd);
-            if (cellEnd == -1) break;
-
-            String innerXml = rowXml.substring(cellOpenEnd + 1, cellEnd);
-            Object cellValue = decodeCellValue(type, innerXml, ss, options);
-            setValueAt(values, dynamicValues, columnIndex, cellValue);
-            cursor = cellEnd + 4;
+            if (fixed != null) {
+                if (columnIndex < fixed.length) fixed[columnIndex] = cellValue;
+            } else {
+                if (columnIndex >= dynamic.length) {
+                    int newCap = dynamic.length;
+                    while (newCap <= columnIndex) newCap *= 2;
+                    Object[] grown = new Object[newCap];
+                    System.arraycopy(dynamic, 0, grown, 0, dynamicSize);
+                    dynamic = grown;
+                }
+                dynamic[columnIndex] = cellValue;
+                if (columnIndex + 1 > dynamicSize) dynamicSize = columnIndex + 1;
+            }
         }
 
-        if (dynamicValues != null) {
-            return dynamicValues.toArray(new Object[0]);
-        }
-        return values;
+        if (fixed != null) return fixed;
+        Object[] trimmed = new Object[dynamicSize];
+        System.arraycopy(dynamic, 0, trimmed, 0, dynamicSize);
+        return trimmed;
     }
 
-    private static void setValueAt(Object[] fixedArray, List<Object> dynamicList, int index, Object value) {
-        if (dynamicList != null) {
-            while (dynamicList.size() <= index) dynamicList.add(null);
-            dynamicList.set(index, value);
-        } else if (index < fixedArray.length) {
-            fixedArray[index] = value;
+    private static String readXmlAttributeRange(String xml, int tagStart, int tagEnd, String name) {
+        int markerLen = name.length() + 1;
+        int searchEnd = tagEnd - markerLen;
+        for (int i = tagStart; i <= searchEnd; i++) {
+            if (xml.charAt(i + markerLen - 1) != '=') continue;
+            boolean match = true;
+            for (int k = 0; k < name.length(); k++) {
+                if (xml.charAt(i + k) != name.charAt(k)) { match = false; break; }
+            }
+            if (!match) continue;
+            char prev = i == tagStart ? ' ' : xml.charAt(i - 1);
+            if (prev != ' ' && prev != '\t' && prev != '\n' && prev != '\r' && prev != '<') continue;
+
+            int q = i + markerLen;
+            if (q >= tagEnd) return null;
+            char quote = xml.charAt(q);
+            if (quote != '"' && quote != '\'') return null;
+            int end = xml.indexOf(quote, q + 1);
+            if (end == -1 || end >= tagEnd) return null;
+            return unescapeXml(xml.substring(q + 1, end));
         }
+        return null;
     }
 
-    private static Object decodeCellValue(String type, String innerXml, LazySharedStrings ss, ReadOptions options) {
-        String formulaText = firstTagText(innerXml, "f");
-        if (formulaText != null && "preserve".equals(options.getFormulas())) {
-            String f = formulaText.startsWith("=") ? formulaText.substring(1) : formulaText;
-            ReadOptions valuesOpt = new ReadOptions().formulas("values");
-            Object result = decodeCellValue(type, innerXml, ss, valuesOpt);
-            return new FormulaCell(f, result);
+    private static Object decodeCellValueRange(String type, String xml, int innerStart, int innerEnd,
+                                                LazySharedStrings ss, ReadOptions options) {
+        boolean preserveFormula = "preserve".equals(options.getFormulas());
+
+        if (preserveFormula) {
+            String formulaText = firstTagTextRange(xml, innerStart, innerEnd, "f");
+            if (formulaText != null) {
+                String f = formulaText.startsWith("=") ? formulaText.substring(1) : formulaText;
+                ReadOptions valuesOpt = new ReadOptions().formulas("values");
+                Object result = decodeCellValueRange(type, xml, innerStart, innerEnd, ss, valuesOpt);
+                return new FormulaCell(f, result);
+            }
         }
 
         if ("s".equals(type)) {
-            String vText = firstTagText(innerXml, "v");
+            String vText = firstTagTextRange(xml, innerStart, innerEnd, "v");
             if (vText == null) return null;
             int idx = Integer.parseInt(vText);
             return ss.get(idx);
         }
         if ("inlineStr".equals(type)) {
-            return inlineStringText(innerXml);
+            return inlineStringText(xml.substring(innerStart, innerEnd));
         }
         if ("b".equals(type)) {
-            return "1".equals(firstTagText(innerXml, "v"));
+            return "1".equals(firstTagTextRange(xml, innerStart, innerEnd, "v"));
         }
 
-        String rawValue = firstTagText(innerXml, "v");
+        String rawValue = firstTagTextRange(xml, innerStart, innerEnd, "v");
         if (rawValue == null) return null;
         try {
             double d = Double.parseDouble(rawValue);
             if (Double.isFinite(d)) {
-                if (d == Math.floor(d) && !rawValue.contains(".") && d >= Integer.MIN_VALUE && d <= Integer.MAX_VALUE) {
+                if (d == Math.floor(d) && rawValue.indexOf('.') == -1 && d >= Integer.MIN_VALUE && d <= Integer.MAX_VALUE) {
                     return (int) d;
                 }
                 return d;
@@ -243,23 +291,46 @@ public final class XlsxReader {
         return valueEnd == -1 ? null : unescapeXml(tag.substring(valueStart, valueEnd));
     }
 
-    private static String firstTagText(String xml, String tag) {
-        int start = xml.indexOf("<" + tag);
-        if (start == -1) return null;
-        int openEnd = xml.indexOf(">", start);
-        if (openEnd == -1) return null;
-        int end = xml.indexOf("</" + tag + ">", openEnd);
-        return end == -1 ? null : unescapeXml(xml.substring(openEnd + 1, end));
+    private static String firstTagTextRange(String xml, int rangeStart, int rangeEnd, String tag) {
+        int len = tag.length();
+        for (int cursor = rangeStart; cursor < rangeEnd; ) {
+            int lt = xml.indexOf('<', cursor);
+            if (lt == -1 || lt >= rangeEnd) return null;
+            if (lt + 1 + len >= rangeEnd) return null;
+
+            boolean nameMatches = true;
+            for (int k = 0; k < len; k++) {
+                if (xml.charAt(lt + 1 + k) != tag.charAt(k)) { nameMatches = false; break; }
+            }
+            char after = xml.charAt(lt + 1 + len);
+            if (!nameMatches || (after != ' ' && after != '>' && after != '/' && after != '\t' && after != '\n' && after != '\r')) {
+                cursor = lt + 1;
+                continue;
+            }
+
+            int openEnd = xml.indexOf('>', lt);
+            if (openEnd == -1 || openEnd >= rangeEnd) return null;
+            if (xml.charAt(openEnd - 1) == '/') return "";
+
+            int closeStart = xml.indexOf("</", openEnd);
+            if (closeStart == -1 || closeStart >= rangeEnd) return null;
+            String chunk = xml.substring(openEnd + 1, closeStart);
+            return chunk.indexOf('&') >= 0 ? unescapeXml(chunk) : chunk;
+        }
+        return null;
     }
 
     private static String inlineStringText(String xml) {
-        Pattern p = Pattern.compile("<t\\b[^>]*>([\\s\\S]*?)</t>");
-        Matcher m = p.matcher(xml);
-        StringBuilder sb = new StringBuilder();
+        Matcher m = INLINE_STRING_T.matcher(xml);
+        StringBuilder sb = null;
         while (m.find()) {
-            sb.append(unescapeXml(m.group(1)));
+            String chunk = m.group(1);
+            if (sb == null) {
+                sb = new StringBuilder(chunk.length());
+            }
+            sb.append(unescapeXml(chunk));
         }
-        return sb.length() == 0 ? null : sb.toString();
+        return sb == null ? null : sb.toString();
     }
 
     static int cellRefToColumnIndex(String ref) {
@@ -274,36 +345,71 @@ public final class XlsxReader {
     }
 
     static String unescapeXml(String value) {
-        if (value.indexOf('&') == -1) return value;
-        value = value.replaceAll("&#x([0-9a-fA-F]+);", "");
-        Matcher hexMatcher = Pattern.compile("&#x([0-9a-fA-F]+);").matcher(value);
-        StringBuffer sb = new StringBuffer();
+        int amp = value.indexOf('&');
+        if (amp == -1) return value;
 
-        String original = value;
-        hexMatcher = Pattern.compile("&#x([0-9a-fA-F]+);").matcher(original);
-        sb = new StringBuffer();
-        while (hexMatcher.find()) {
-            int cp = Integer.parseInt(hexMatcher.group(1), 16);
-            hexMatcher.appendReplacement(sb, Matcher.quoteReplacement(new String(Character.toChars(cp))));
+        int length = value.length();
+        StringBuilder sb = new StringBuilder(length);
+        if (amp > 0) sb.append(value, 0, amp);
+        int cursor = amp;
+
+        while (cursor < length) {
+            char c = value.charAt(cursor);
+            if (c != '&') {
+                sb.append(c);
+                cursor++;
+                continue;
+            }
+
+            int semi = value.indexOf(';', cursor + 1);
+            if (semi == -1) {
+                sb.append(value, cursor, length);
+                break;
+            }
+
+            int len = semi - cursor;
+            if (len == 4) {
+                if (value.charAt(cursor + 1) == 'a' && value.charAt(cursor + 2) == 'm' && value.charAt(cursor + 3) == 'p') {
+                    sb.append('&'); cursor = semi + 1; continue;
+                }
+                if (value.charAt(cursor + 1) == 'l' && value.charAt(cursor + 2) == 't') {
+                    sb.append('<'); cursor = semi + 1; continue;
+                }
+                if (value.charAt(cursor + 1) == 'g' && value.charAt(cursor + 2) == 't') {
+                    sb.append('>'); cursor = semi + 1; continue;
+                }
+            } else if (len == 5) {
+                if (value.charAt(cursor + 1) == 'a' && value.charAt(cursor + 2) == 'p'
+                        && value.charAt(cursor + 3) == 'o' && value.charAt(cursor + 4) == 's') {
+                    sb.append('\''); cursor = semi + 1; continue;
+                }
+                if (value.charAt(cursor + 1) == 'q' && value.charAt(cursor + 2) == 'u'
+                        && value.charAt(cursor + 3) == 'o' && value.charAt(cursor + 4) == 't') {
+                    sb.append('"'); cursor = semi + 1; continue;
+                }
+            }
+
+            if (len > 2 && value.charAt(cursor + 1) == '#') {
+                int radix = 10;
+                int numStart = cursor + 2;
+                if (value.charAt(cursor + 2) == 'x' || value.charAt(cursor + 2) == 'X') {
+                    radix = 16;
+                    numStart = cursor + 3;
+                }
+                if (numStart < semi) {
+                    try {
+                        int cp = Integer.parseInt(value.substring(numStart, semi), radix);
+                        sb.appendCodePoint(cp);
+                        cursor = semi + 1;
+                        continue;
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+
+            sb.append(value, cursor, semi + 1);
+            cursor = semi + 1;
         }
-        hexMatcher.appendTail(sb);
-        value = sb.toString();
-
-        Matcher decMatcher = Pattern.compile("&#(\\d+);").matcher(value);
-        sb = new StringBuffer();
-        while (decMatcher.find()) {
-            int cp = Integer.parseInt(decMatcher.group(1));
-            decMatcher.appendReplacement(sb, Matcher.quoteReplacement(new String(Character.toChars(cp))));
-        }
-        decMatcher.appendTail(sb);
-        value = sb.toString();
-
-        value = value.replace("&quot;", "\"");
-        value = value.replace("&apos;", "'");
-        value = value.replace("&lt;", "<");
-        value = value.replace("&gt;", ">");
-        value = value.replace("&amp;", "&");
-        return value;
+        return sb.toString();
     }
 
     private static List<SheetEntry> resolveSheets(Map<String, byte[]> files) {
@@ -409,41 +515,19 @@ public final class XlsxReader {
 
     private static Map<String, byte[]> unzip(byte[] data) throws IOException {
         Map<String, byte[]> result = new LinkedHashMap<>();
-        ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(data));
-        try {
+        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(data))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 String name = entry.getName();
                 String normalized = name.startsWith("/") ? name.substring(1) : name;
-                byte[] content = readStreamFully(zis);
+                byte[] content = IOUtils.readAllBytes(zis);
                 result.put(name, content);
                 if (!name.equals(normalized)) {
                     result.put(normalized, content);
                 }
             }
-        } finally {
-            zis.close();
         }
         return result;
-    }
-
-    private static byte[] readStreamFully(InputStream is) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        int read;
-        while ((read = is.read(buf)) != -1) {
-            baos.write(buf, 0, read);
-        }
-        return baos.toByteArray();
-    }
-
-    private static byte[] readBytes(String path) throws IOException {
-        FileInputStream fis = new FileInputStream(path);
-        try {
-            return readStreamFully(fis);
-        } finally {
-            fis.close();
-        }
     }
 
     static class SheetEntry {

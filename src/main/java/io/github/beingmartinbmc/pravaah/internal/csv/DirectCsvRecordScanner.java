@@ -1,5 +1,11 @@
 package io.github.beingmartinbmc.pravaah.internal.csv;
 
+/**
+ * Inline single-pass CSV scanner. Walks the input string once, emits fields
+ * directly to the {@link CsvRecordSink} without any per-field wrapper
+ * allocation. Quoted fields use a fast-path that avoids the
+ * {@link StringBuilder} when no escapes are present.
+ */
 public final class DirectCsvRecordScanner implements CsvRecordScanner {
     private static final char QUOTE = '"';
     private static final char CR = '\r';
@@ -7,107 +13,117 @@ public final class DirectCsvRecordScanner implements CsvRecordScanner {
 
     @Override
     public void scan(String text, char delimiter, CsvRecordSink sink) {
+        final int length = text.length();
         int cursor = 0;
-        int length = text.length();
 
         while (cursor < length) {
             sink.startRecord();
             int fieldIndex = 0;
-            boolean endRecord = false;
+            boolean recordDone = false;
 
-            while (!endRecord) {
-                Field field = readField(text, cursor, delimiter);
-                sink.field(fieldIndex++, field.value);
-                cursor = field.nextCursor;
-                endRecord = field.endRecord;
+            while (!recordDone) {
+                if (cursor >= length) {
+                    sink.field(fieldIndex++, "");
+                    recordDone = true;
+                    break;
+                }
+
+                char first = text.charAt(cursor);
+
+                if (first == CR || first == LF) {
+                    sink.field(fieldIndex++, text, cursor, cursor);
+                    cursor = skipNewline(text, cursor);
+                    recordDone = true;
+                    break;
+                }
+
+                if (first == delimiter) {
+                    sink.field(fieldIndex++, text, cursor, cursor);
+                    cursor++;
+                    continue;
+                }
+
+                if (first == QUOTE) {
+                    cursor++;
+                    int contentStart = cursor;
+                    StringBuilder escaped = null;
+
+                    while (cursor < length) {
+                        char c = text.charAt(cursor);
+                        if (c != QUOTE) {
+                            cursor++;
+                            continue;
+                        }
+
+                        if (cursor + 1 < length && text.charAt(cursor + 1) == QUOTE) {
+                            if (escaped == null) {
+                                escaped = new StringBuilder(cursor - contentStart + 16);
+                            }
+                            escaped.append(text, contentStart, cursor).append(QUOTE);
+                            cursor += 2;
+                            contentStart = cursor;
+                            continue;
+                        }
+
+                        String value;
+                        if (escaped == null) {
+                            value = text.substring(contentStart, cursor);
+                        } else {
+                            escaped.append(text, contentStart, cursor);
+                            value = escaped.toString();
+                        }
+                        sink.field(fieldIndex++, value);
+
+                        cursor++;
+                        if (cursor >= length) {
+                            recordDone = true;
+                            break;
+                        }
+                        char afterQuote = text.charAt(cursor);
+                        if (afterQuote == delimiter) {
+                            cursor++;
+                        } else if (afterQuote == CR || afterQuote == LF) {
+                            cursor = skipNewline(text, cursor);
+                            recordDone = true;
+                        } else {
+                            throw new IllegalStateException("Invalid quoted CSV field");
+                        }
+                        break;
+                    }
+
+                    if (cursor >= length && !recordDone && escaped == null) {
+                        throw new IllegalStateException("Unclosed quoted CSV field");
+                    }
+                    continue;
+                }
+
+                int fieldStart = cursor;
+                boolean emitted = false;
+                while (cursor < length) {
+                    char c = text.charAt(cursor);
+                    if (c == delimiter) {
+                        sink.field(fieldIndex++, text, fieldStart, cursor);
+                        cursor++;
+                        emitted = true;
+                        break;
+                    }
+                    if (c == CR || c == LF) {
+                        sink.field(fieldIndex++, text, fieldStart, cursor);
+                        cursor = skipNewline(text, cursor);
+                        recordDone = true;
+                        emitted = true;
+                        break;
+                    }
+                    cursor++;
+                }
+                if (!emitted) {
+                    sink.field(fieldIndex++, text, fieldStart, cursor);
+                    recordDone = true;
+                }
             }
 
             sink.endRecord();
         }
-    }
-
-    private Field readField(String text, int start, char delimiter) {
-        int length = text.length();
-        if (start >= length) {
-            return new Field("", start, true);
-        }
-
-        char first = text.charAt(start);
-        if (first == delimiter) {
-            return new Field("", start + 1, false);
-        }
-        if (first == CR || first == LF) {
-            return new Field("", skipNewline(text, start), true);
-        }
-        if (first == QUOTE) {
-            return readQuotedField(text, start, delimiter);
-        }
-        return readUnquotedField(text, start, delimiter);
-    }
-
-    private Field readUnquotedField(String text, int start, char delimiter) {
-        int cursor = start;
-        int length = text.length();
-        while (cursor < length) {
-            char c = text.charAt(cursor);
-            if (c == delimiter) {
-                return new Field(text.substring(start, cursor), cursor + 1, false);
-            }
-            if (c == CR || c == LF) {
-                return new Field(text.substring(start, cursor), skipNewline(text, cursor), true);
-            }
-            cursor++;
-        }
-        return new Field(text.substring(start, cursor), cursor, true);
-    }
-
-    private Field readQuotedField(String text, int start, char delimiter) {
-        int cursor = start + 1;
-        int contentStart = cursor;
-        int length = text.length();
-        StringBuilder escaped = null;
-
-        while (cursor < length) {
-            char c = text.charAt(cursor);
-            if (c != QUOTE) {
-                cursor++;
-                continue;
-            }
-
-            if (cursor + 1 < length && text.charAt(cursor + 1) == QUOTE) {
-                if (escaped == null) {
-                    escaped = new StringBuilder(cursor - contentStart + 16);
-                }
-                escaped.append(text, contentStart, cursor).append(QUOTE);
-                cursor += 2;
-                contentStart = cursor;
-                continue;
-            }
-
-            String value;
-            if (escaped == null) {
-                value = text.substring(contentStart, cursor);
-            } else {
-                escaped.append(text, contentStart, cursor);
-                value = escaped.toString();
-            }
-
-            cursor++;
-            if (cursor >= length) {
-                return new Field(value, cursor, true);
-            }
-
-            char afterQuote = text.charAt(cursor);
-            if (afterQuote == delimiter) {
-                return new Field(value, cursor + 1, false);
-            }
-            if (afterQuote == CR || afterQuote == LF) {
-                return new Field(value, skipNewline(text, cursor), true);
-            }
-            throw new IllegalStateException("Invalid quoted CSV field");
-        }
-
-        throw new IllegalStateException("Unclosed quoted CSV field");
     }
 
     private static int skipNewline(String text, int cursor) {
@@ -115,17 +131,5 @@ public final class DirectCsvRecordScanner implements CsvRecordScanner {
             return cursor + 2;
         }
         return cursor + 1;
-    }
-
-    private static final class Field {
-        final String value;
-        final int nextCursor;
-        final boolean endRecord;
-
-        Field(String value, int nextCursor, boolean endRecord) {
-            this.value = value;
-            this.nextCursor = nextCursor;
-            this.endRecord = endRecord;
-        }
     }
 }

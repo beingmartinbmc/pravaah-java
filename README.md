@@ -17,10 +17,10 @@ Looking for the Node.js version? See [`beingmartinbmc/pravaah`](https://github.c
 
 ```text
 CSV direct count: 7,046,063 rows, 145MB
-Pravaah Java  330ms on JDK 17
+Pravaah Java  170ms on JDK 17
 
 CSV read/count: 1,004,894 rows, 244MB
-Pravaah Java  354ms read/count on JDK 17
+Pravaah Java  237ms read/count on JDK 17 (warm)
 ```
 
 Benchmarked locally on the repository benchmark files using JDK 8, 11, and 17 on Apple Silicon.
@@ -367,40 +367,40 @@ xychart-beta
     title "CSV Read/Count - 7,046,063 rows, 145MB on JDK 17"
     x-axis ["Pravaah", "uniVocity", "Jackson CSV", "Commons CSV", "OpenCSV"]
     y-axis "Milliseconds, lower is better" 0 --> 1500
-    bar [330, 400, 972, 1050, 1420]
+    bar [170, 400, 972, 1050, 1420]
 ```
 
 ```mermaid
 xychart-beta
     title "CSV Read/Count - 1,004,894 rows, 244MB on JDK 17"
-    x-axis ["uniVocity", "Pravaah", "Jackson CSV", "Commons CSV", "OpenCSV"]
+    x-axis ["Pravaah", "uniVocity", "Jackson CSV", "Commons CSV", "OpenCSV"]
     y-axis "Milliseconds, lower is better" 0 --> 1100
-    bar [349, 354, 859, 903, 1010]
+    bar [237, 349, 859, 903, 1010]
 ```
 
 #### JDK 8
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 3 ms | 1 ms | 2 ms | 5 ms | 3 ms |
-| CSV | 244 MB | 1,004,894 | 404 ms | 314 ms | 862 ms | 787 ms | 726 ms |
-| CSV | 145 MB | 7,046,063 | 344 ms | 391 ms | 810 ms | 803 ms | 826 ms |
+| CSV | 498 KB | 1,000 | 1 ms | 1 ms | 2 ms | 5 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 277 ms | 314 ms | 862 ms | 787 ms | 726 ms |
+| CSV | 145 MB | 7,046,063 | 182 ms | 391 ms | 810 ms | 803 ms | 826 ms |
 
 #### JDK 11
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 4 ms | 3 ms | 2 ms | 8 ms | 3 ms |
-| CSV | 244 MB | 1,004,894 | 381 ms | 420 ms | 919 ms | 899 ms | 952 ms |
-| CSV | 145 MB | 7,046,063 | 358 ms | 385 ms | 1.15 s | 1.27 s | 1.24 s |
+| CSV | 498 KB | 1,000 | 3 ms | 3 ms | 2 ms | 8 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 394 ms | 420 ms | 919 ms | 899 ms | 952 ms |
+| CSV | 145 MB | 7,046,063 | 188 ms | 385 ms | 1.15 s | 1.27 s | 1.24 s |
 
 #### JDK 17
 
 | Format | File size | Rows | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 498 KB | 1,000 | 3 ms | 3 ms | 3 ms | 6 ms | 3 ms |
-| CSV | 244 MB | 1,004,894 | 354 ms | 349 ms | 903 ms | 1.01 s | 859 ms |
-| CSV | 145 MB | 7,046,063 | 330 ms | 400 ms | 1.05 s | 1.42 s | 972 ms |
+| CSV | 498 KB | 1,000 | 1 ms | 3 ms | 3 ms | 6 ms | 3 ms |
+| CSV | 244 MB | 1,004,894 | 237 ms | 349 ms | 903 ms | 1.01 s | 859 ms |
+| CSV | 145 MB | 7,046,063 | 170 ms | 400 ms | 1.05 s | 1.42 s | 972 ms |
 
 ### Spreadsheet Read
 
@@ -411,7 +411,7 @@ xychart-beta
     title "Spreadsheet Read - XLSX, 35,808 rows, 1.5MB on JDK 17"
     x-axis ["Pravaah", "EasyExcel", "Apache POI"]
     y-axis "Milliseconds, lower is better" 0 --> 550
-    bar [91, 145, 510]
+    bar [72, 145, 510]
 ```
 
 ```mermaid
@@ -419,32 +419,32 @@ xychart-beta
     title "Spreadsheet Read - XLS, 65,535 rows, 4.8MB on JDK 17"
     x-axis ["Pravaah", "EasyExcel", "Apache POI"]
     y-axis "Milliseconds, lower is better" 0 --> 200
-    bar [46, 77, 176]
+    bar [28, 77, 176]
 ```
 
 #### JDK 8
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 18 ms | 50 ms | 18 ms |
-| XLSX | 1.5 MB | 35,808 | 100 ms | 412 ms | 133 ms |
-| XLS | 4.8 MB | 65,535 | 50 ms | 154 ms | 66 ms |
+| XLSX | 244 KB | 1,000 | 13 ms | 50 ms | 18 ms |
+| XLSX | 1.5 MB | 35,808 | 71 ms | 412 ms | 133 ms |
+| XLS | 4.8 MB | 65,535 | 28 ms | 154 ms | 66 ms |
 
 #### JDK 11
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 27 ms | 84 ms | 23 ms |
-| XLSX | 1.5 MB | 35,808 | 120 ms | 551 ms | 145 ms |
-| XLS | 4.8 MB | 65,535 | 52 ms | 219 ms | 91 ms |
+| XLSX | 244 KB | 1,000 | 18 ms | 84 ms | 23 ms |
+| XLSX | 1.5 MB | 35,808 | 71 ms | 551 ms | 145 ms |
+| XLS | 4.8 MB | 65,535 | 27 ms | 219 ms | 91 ms |
 
 #### JDK 17
 
 | Format | File size | Rows | Pravaah | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| XLSX | 244 KB | 1,000 | 22 ms | 69 ms | 21 ms |
-| XLSX | 1.5 MB | 35,808 | 91 ms | 510 ms | 145 ms |
-| XLS | 4.8 MB | 65,535 | 46 ms | 176 ms | 77 ms |
+| XLSX | 244 KB | 1,000 | 19 ms | 69 ms | 21 ms |
+| XLSX | 1.5 MB | 35,808 | 72 ms | 510 ms | 145 ms |
+| XLS | 4.8 MB | 65,535 | 28 ms | 176 ms | 77 ms |
 
 ### Write
 
@@ -453,9 +453,9 @@ Write workloads use 100,000 generated rows x 10 columns. CSV is compared with CS
 ```mermaid
 xychart-beta
     title "CSV Write - 100,000 rows x 10 columns on JDK 17"
-    x-axis ["uniVocity", "Jackson CSV", "Pravaah", "OpenCSV", "Commons CSV"]
+    x-axis ["Pravaah", "uniVocity", "Jackson CSV", "OpenCSV", "Commons CSV"]
     y-axis "Milliseconds, lower is better" 0 --> 110
-    bar [25, 29, 33, 34, 97]
+    bar [22, 25, 29, 34, 97]
 ```
 
 ```mermaid
@@ -463,29 +463,29 @@ xychart-beta
     title "XLSX Write - 100,000 rows x 10 columns on JDK 17"
     x-axis ["Pravaah", "EasyExcel", "Apache POI"]
     y-axis "Milliseconds, lower is better" 0 --> 650
-    bar [127, 346, 583]
+    bar [104, 346, 583]
 ```
 
 #### JDK 8
 
 | Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 100,000 x 10 | 11.3 MB | 36 ms | 33 ms | 109 ms | 37 ms | 31 ms | - | - |
-| XLSX | 100,000 x 10 | 6.4 MB | 247 ms | - | - | - | - | 680 ms | 326 ms |
+| CSV | 100,000 x 10 | 11.3 MB | 24 ms | 33 ms | 109 ms | 37 ms | 31 ms | - | - |
+| XLSX | 100,000 x 10 | 5.2 MB | 131 ms | - | - | - | - | 680 ms | 326 ms |
 
 #### JDK 11
 
 | Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 100,000 x 10 | 11.3 MB | 34 ms | 29 ms | 64 ms | 37 ms | 31 ms | - | - |
-| XLSX | 100,000 x 10 | 6.4 MB | 155 ms | - | - | - | - | 663 ms | 323 ms |
+| CSV | 100,000 x 10 | 11.3 MB | 25 ms | 29 ms | 64 ms | 37 ms | 31 ms | - | - |
+| XLSX | 100,000 x 10 | 5.2 MB | 129 ms | - | - | - | - | 663 ms | 323 ms |
 
 #### JDK 17
 
 | Format | Rows x columns | Output size | Pravaah | uniVocity | Commons CSV | OpenCSV | Jackson CSV | Apache POI | EasyExcel |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CSV | 100,000 x 10 | 11.3 MB | 33 ms | 25 ms | 97 ms | 34 ms | 29 ms | - | - |
-| XLSX | 100,000 x 10 | 6.4 MB | 127 ms | - | - | - | - | 583 ms | 346 ms |
+| CSV | 100,000 x 10 | 11.3 MB | 22 ms | 25 ms | 97 ms | 34 ms | 29 ms | - | - |
+| XLSX | 100,000 x 10 | 5.2 MB | 104 ms | - | - | - | - | 583 ms | 346 ms |
 
 ### Format Coverage
 
@@ -506,11 +506,15 @@ No benchmark harness or downloaded competitor jars are required in the repositor
 
 ## How The Performance Works
 
-**CSV:** A direct scanner walks the text once and emits fields to specialized sinks. Count-only scans avoid `Row` allocation. Validation can consume scanner output without first building a separate raw-row list.
+**CSV read:** A single inline scanner walks the text once with no per-field allocations. Sinks receive field slices (start, end) instead of substrings, so the count path skips `String` materialization entirely. The row materializer reuses the same key lookup per column for the whole pass.
+
+**CSV write:** Writes directly into a 64 KiB byte buffer with an ASCII fast path that bypasses `OutputStreamWriter` per-char encoding. UTF-8 is only invoked when a value contains non-ASCII characters.
 
 **XLS:** The reader opens the OLE2 compound file, extracts the `Workbook` stream, and parses BIFF8 records directly. It handles shared strings, sheet metadata, numeric cells, RK cells, booleans, blanks, labels, and cached formula values.
 
-**XLSX:** The reader targets workbook metadata and selected worksheet XML instead of building a full workbook object model.
+**XLSX read:** Targets workbook metadata and selected worksheet XML instead of building a full workbook object model. Worksheet XML is scanned in place by character index, so cell values become `Row` entries without intermediate `Object[]` arrays. XML entity decoding runs as a single-pass `StringBuilder` walk; the regex fallbacks were retired.
+
+**XLSX write:** Cell column-name prefixes are pre-encoded as ASCII byte arrays once per sheet. Row XML is emitted through a 64 KiB byte sink with an ASCII fast path; XML escaping happens in a single pass without intermediate strings.
 
 **MR-JAR:** Java 8 uses the baseline runtime classes. Java 11 and Java 17+ load overlay implementations from `META-INF/versions/*`.
 
