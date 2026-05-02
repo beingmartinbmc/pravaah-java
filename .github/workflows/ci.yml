@@ -31,6 +31,9 @@ jobs:
       - name: Verify build
         run: mvn -B --no-transfer-progress -P central-release -Dgpg.skip=true clean verify
 
+      - name: Check test coverage >= 90%
+        run: mvn -B --no-transfer-progress jacoco:check
+
       - name: Prepare runtime artifact
         shell: bash
         run: |
