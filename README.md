@@ -1,6 +1,26 @@
-# Pravaah Java
+# Pravaah: Schema-first file ingestion for Java
 
-**Stop writing 300 lines of fragile CSV / Excel parsing + validation code.**
+> **Parsing is not ingestion.**
+>
+> Stop writing hundreds of lines of fragile CSV / XLSX parsing + validation code. Pravaah turns messy uploads into clean, validated data with structured rejected rows — in a few lines.
+
+```java
+SchemaDefinition schema = new SchemaDefinition()
+    .field("email", Schema.email())
+    .field("age",   Schema.number());
+
+ProcessResult result = Pravaah.parseDetailed("upload.csv", schema, ReadOptions.defaults());
+
+result.getRows();     // ✔ valid, typed rows ready for your DB
+result.getIssues();   // ❌ rejected rows: row #, column, expected, raw value
+```
+
+```text
+✔ Clean rows: 980
+❌ Rejected rows: 20  (invalid email, non-numeric age)
+```
+
+> _Real scenario: a SaaS admin panel where ops uploads a customer CSV every morning. Headers drift across customers, types are best-effort, and bad rows have to come back as actionable feedback. Pravaah owns the whole loop._
 
 Pravaah is the **upload → clean → validate → reject → output** pipeline for Java. Point it at a messy CSV, XLS, XLSX, or JSON file — get back typed rows, a rejection report, and zero hand-written glue.
 
@@ -36,6 +56,20 @@ Pravaah Java  237ms read/count on JDK 17 (warm)
 ```
 
 Benchmarked locally on the repository benchmark files using JDK 8, 11, and 17 on Apple Silicon.
+
+---
+
+## Before vs After
+
+| ❌ Without Pravaah                                         | ✅ With Pravaah                                                 |
+| --------------------------------------------------------- | --------------------------------------------------------------- |
+| 200–500 lines per upload type                             | ~10 lines per upload type                                       |
+| Manual `String.split` / POI `Workbook` ceremony           | One `Pravaah.parseDetailed(file, schema, options)` call         |
+| Hand-rolled regex per email, phone, number, date          | `Schema.email() / number() / bool() / date() / phone()`         |
+| Ad-hoc `List<Issue>` you maintain in parallel             | `result.getIssues()` — already structured (row #, column, expected, raw) |
+| Re-implemented separately for CSV, `.xls`, `.xlsx`        | Same code; format auto-detected from the path                   |
+| Header drift handled with bespoke alias `Map`             | `cleaning.fuzzyHeader("email", "E-mail Address", ...)`          |
+| Rejection report = a second hand-rolled CSV writer        | `SchemaValidator.writeIssueReport(issues, "rejected.csv")`      |
 
 ---
 
@@ -94,7 +128,7 @@ Want to skip rejected rows entirely instead of collecting them? Swap one enum: `
 
 ## Why Pravaah Is Different
 
-Most Java libraries solve _one_ stage of a file upload. Pravaah owns the whole pipeline so you don't glue five things together.
+> **Parsing is not ingestion.** Most Java libraries hand you a `Workbook` or a `String[]` and call it done. Pravaah owns the whole pipeline so you don't glue five things together.
 
 | Stage              | Without Pravaah                                       | With Pravaah                                |
 | ------------------ | ----------------------------------------------------- | ------------------------------------------- |
