@@ -2,11 +2,20 @@ package io.github.beingmartinbmc.pravaah.xlsx;
 
 import io.github.beingmartinbmc.pravaah.Row;
 import io.github.beingmartinbmc.pravaah.WriteOptions;
+import io.github.beingmartinbmc.pravaah.internal.io.IOUtils;
 
-import java.io.*;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.*;
-import java.util.zip.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 public final class XlsxWriter {
 
@@ -23,9 +32,8 @@ public final class XlsxWriter {
             sheets.add(new Worksheet(options.getSheetName() != null ? options.getSheetName() : "Sheet1"));
         }
 
-        FileOutputStream fos = new FileOutputStream(destination);
-        ZipOutputStream zos = new ZipOutputStream(fos);
-        try {
+        try (FileOutputStream fos = new FileOutputStream(destination);
+             ZipOutputStream zos = new ZipOutputStream(fos)) {
             zos.setLevel(1);
             writeEntry(zos, "[Content_Types].xml", contentTypesXml(sheets));
             writeEntry(zos, "_rels/.rels", rootRelsXml());
@@ -41,8 +49,6 @@ public final class XlsxWriter {
                 if (headers == null) headers = inferHeaders(sheet.getRows());
                 writeWorksheetEntry(zos, "xl/worksheets/sheet" + (i + 1) + ".xml", sheet, headers);
             }
-        } finally {
-            zos.close();
         }
     }
 
@@ -59,10 +65,13 @@ public final class XlsxWriter {
     private static void writeWorksheetEntry(ZipOutputStream zos, String name, Worksheet sheet,
                                             List<String> headers) throws IOException {
         zos.putNextEntry(new ZipEntry(name));
-        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(zos, StandardCharsets.UTF_8), 64 * 1024);
-        writeWorksheetXml(writer, sheet, headers);
-        writer.flush();
-        zos.closeEntry();
+        XmlByteSink sink = new XmlByteSink(zos, IOUtils.LARGE_IO_BUFFER_SIZE);
+        try {
+            writeWorksheetXml(sink, sheet, headers);
+            sink.flush();
+        } finally {
+            zos.closeEntry();
+        }
     }
 
     private static void writeEntry(ZipOutputStream zos, String name, String content) throws IOException {
@@ -76,164 +85,168 @@ public final class XlsxWriter {
         return new ArrayList<>(rows.get(0).keySet());
     }
 
-    private static void writeWorksheetXml(Writer writer, Worksheet sheet, List<String> headers) throws IOException {
-        writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
-        writer.write("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n");
+    private static void writeWorksheetXml(XmlByteSink writer, Worksheet sheet, List<String> headers) throws IOException {
+        writer.writeAscii("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
+        writer.writeAscii("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n");
 
         if (sheet != null && sheet.getFrozen() != null) {
             FreezePane f = sheet.getFrozen();
-            writer.write("  <sheetViews><sheetView workbookViewId=\"0\"><pane ");
+            writer.writeAscii("  <sheetViews><sheetView workbookViewId=\"0\"><pane ");
             if (f.getXSplit() != null) {
-                writer.write("xSplit=\"");
-                writer.write(String.valueOf(f.getXSplit()));
-                writer.write("\" ");
+                writer.writeAscii("xSplit=\"");
+                writer.writeAscii(String.valueOf(f.getXSplit()));
+                writer.writeAscii("\" ");
             }
             if (f.getYSplit() != null) {
-                writer.write("ySplit=\"");
-                writer.write(String.valueOf(f.getYSplit()));
-                writer.write("\" ");
+                writer.writeAscii("ySplit=\"");
+                writer.writeAscii(String.valueOf(f.getYSplit()));
+                writer.writeAscii("\" ");
             }
             if (f.getTopLeftCell() != null) {
-                writer.write("topLeftCell=\"");
-                writer.write(escapeXml(f.getTopLeftCell()));
-                writer.write("\" ");
+                writer.writeAscii("topLeftCell=\"");
+                writer.writeEscaped(f.getTopLeftCell());
+                writer.writeAscii("\" ");
             }
-            writer.write("state=\"frozen\"/></sheetView></sheetViews>\n");
+            writer.writeAscii("state=\"frozen\"/></sheetView></sheetViews>\n");
         }
 
         if (sheet != null && !sheet.getColumns().isEmpty()) {
-            writer.write("  <cols>");
+            writer.writeAscii("  <cols>");
             for (int i = 0; i < sheet.getColumns().size(); i++) {
                 ColumnDefinition col = sheet.getColumns().get(i);
-                writer.write("<col min=\"");
-                writer.write(String.valueOf(i + 1));
-                writer.write("\" max=\"");
-                writer.write(String.valueOf(i + 1));
-                writer.write("\" width=\"");
-                writer.write(String.valueOf(col.getWidth()));
-                writer.write("\" customWidth=\"1\"/>");
+                writer.writeAscii("<col min=\"");
+                writer.writeAscii(String.valueOf(i + 1));
+                writer.writeAscii("\" max=\"");
+                writer.writeAscii(String.valueOf(i + 1));
+                writer.writeAscii("\" width=\"");
+                writer.writeAscii(String.valueOf(col.getWidth()));
+                writer.writeAscii("\" customWidth=\"1\"/>");
             }
-            writer.write("</cols>\n");
+            writer.writeAscii("</cols>\n");
         }
 
         String[] headerArr = headers.toArray(new String[0]);
-        String[] columnNames = columnNames(headerArr.length);
+        byte[][] columnPrefixes = columnNameBytes(headerArr.length);
 
-        writer.write("  <sheetData>\n");
-        writeRow(writer, 1, headerArr, columnNames);
+        writer.writeAscii("  <sheetData>\n");
+        writeHeaderRow(writer, 1, headerArr, columnPrefixes);
         List<Row> rows = sheet != null ? sheet.getRows() : Collections.<Row>emptyList();
         for (int r = 0; r < rows.size(); r++) {
             Row row = rows.get(r);
             int rowNumber = r + 2;
-            writer.write("    <row r=\"");
-            writer.write(String.valueOf(rowNumber));
-            writer.write("\">");
+            writer.writeAscii("    <row r=\"");
+            writer.writeIntAscii(rowNumber);
+            writer.writeAscii("\">");
             for (int c = 0; c < headerArr.length; c++) {
-                writeCellXml(writer, row.get(headerArr[c]), columnNames[c], rowNumber);
+                writeCellXml(writer, row.get(headerArr[c]), columnPrefixes[c], rowNumber);
             }
-            writer.write("</row>\n");
+            writer.writeAscii("</row>\n");
         }
-        writer.write("  </sheetData>\n");
+        writer.writeAscii("  </sheetData>\n");
 
         if (sheet != null && !sheet.getTables().isEmpty()) {
-            writer.write("  <autoFilter ref=\"");
-            writer.write(escapeXml(sheet.getTables().get(0).getRange()));
-            writer.write("\"/>\n");
+            writer.writeAscii("  <autoFilter ref=\"");
+            writer.writeEscaped(sheet.getTables().get(0).getRange());
+            writer.writeAscii("\"/>\n");
         }
         if (sheet != null && !sheet.getMerges().isEmpty()) {
-            writer.write("  <mergeCells count=\"");
-            writer.write(String.valueOf(sheet.getMerges().size()));
-            writer.write("\">");
+            writer.writeAscii("  <mergeCells count=\"");
+            writer.writeAscii(String.valueOf(sheet.getMerges().size()));
+            writer.writeAscii("\">");
             for (String merge : sheet.getMerges()) {
-                writer.write("<mergeCell ref=\"");
-                writer.write(escapeXml(merge));
-                writer.write("\"/>");
+                writer.writeAscii("<mergeCell ref=\"");
+                writer.writeEscaped(merge);
+                writer.writeAscii("\"/>");
             }
-            writer.write("</mergeCells>\n");
+            writer.writeAscii("</mergeCells>\n");
         }
         if (sheet != null && !sheet.getValidations().isEmpty()) {
-            writer.write("  <dataValidations count=\"");
-            writer.write(String.valueOf(sheet.getValidations().size()));
-            writer.write("\">");
+            writer.writeAscii("  <dataValidations count=\"");
+            writer.writeAscii(String.valueOf(sheet.getValidations().size()));
+            writer.writeAscii("\">");
             for (DataValidation dv : sheet.getValidations()) {
-                writer.write("<dataValidation type=\"");
-                writer.write(dv.getType());
-                writer.write("\" sqref=\"");
-                writer.write(escapeXml(dv.getRange()));
-                writer.write("\">");
+                writer.writeAscii("<dataValidation type=\"");
+                writer.writeAscii(dv.getType());
+                writer.writeAscii("\" sqref=\"");
+                writer.writeEscaped(dv.getRange());
+                writer.writeAscii("\">");
                 if (dv.getFormula() != null) {
-                    writer.write("<formula1>");
-                    writer.write(escapeXml(dv.getFormula()));
-                    writer.write("</formula1>");
+                    writer.writeAscii("<formula1>");
+                    writer.writeEscaped(dv.getFormula());
+                    writer.writeAscii("</formula1>");
                 }
-                writer.write("</dataValidation>");
+                writer.writeAscii("</dataValidation>");
             }
-            writer.write("</dataValidations>\n");
+            writer.writeAscii("</dataValidations>\n");
         }
 
-        writer.write("</worksheet>");
+        writer.writeAscii("</worksheet>");
     }
 
-    private static void writeRow(Writer writer, int rowNumber, Object[] values, String[] columnNames) throws IOException {
-        writer.write("    <row r=\"");
-        writer.write(String.valueOf(rowNumber));
-        writer.write("\">");
+    private static void writeHeaderRow(XmlByteSink writer, int rowNumber, Object[] values, byte[][] columnPrefixes) throws IOException {
+        writer.writeAscii("    <row r=\"");
+        writer.writeIntAscii(rowNumber);
+        writer.writeAscii("\">");
         for (int c = 0; c < values.length; c++) {
-            writeCellXml(writer, values[c], columnNames[c], rowNumber);
+            writeCellXml(writer, values[c], columnPrefixes[c], rowNumber);
         }
-        writer.write("</row>\n");
+        writer.writeAscii("</row>\n");
     }
 
-    private static void writeCellXml(Writer writer, Object value, String columnName, int rowNumber) throws IOException {
-        writer.write("<c r=\"");
-        writer.write(columnName);
-        writer.write(String.valueOf(rowNumber));
-        writer.write("\"");
+    private static void writeCellXml(XmlByteSink writer, Object value, byte[] columnPrefix, int rowNumber) throws IOException {
+        writer.writeBytes(columnPrefix);
+        writer.writeIntAscii(rowNumber);
+        writer.writeAscii("\"");
         if (value instanceof FormulaCell) {
             FormulaCell fc = (FormulaCell) value;
             String f = fc.getFormula().startsWith("=") ? fc.getFormula().substring(1) : fc.getFormula();
-            writer.write("><f>");
-            writer.write(escapeXml(f));
-            writer.write("</f>");
+            writer.writeAscii("><f>");
+            writer.writeEscaped(f);
+            writer.writeAscii("</f>");
             if (fc.getResult() != null) {
-                writer.write("<v>");
-                writer.write(escapeXml(String.valueOf(fc.getResult())));
-                writer.write("</v>");
+                writer.writeAscii("<v>");
+                writer.writeEscaped(String.valueOf(fc.getResult()));
+                writer.writeAscii("</v>");
             }
-            writer.write("</c>");
+            writer.writeAscii("</c>");
             return;
         }
         if (value == null) {
-            writer.write("/>");
+            writer.writeAscii("/>");
             return;
         }
         if (value instanceof Number) {
-            writer.write("><v>");
-            writer.write(String.valueOf(value));
-            writer.write("</v></c>");
+            writer.writeAscii("><v>");
+            writer.writeAscii(String.valueOf(value));
+            writer.writeAscii("</v></c>");
             return;
         }
         if (value instanceof Boolean) {
-            writer.write(" t=\"b\"><v>");
-            writer.write((Boolean) value ? "1" : "0");
-            writer.write("</v></c>");
+            writer.writeAscii(" t=\"b\"><v>");
+            writer.writeAscii((Boolean) value ? "1" : "0");
+            writer.writeAscii("</v></c>");
             return;
         }
-        writer.write(" t=\"inlineStr\"><is><t>");
+        writer.writeAscii(" t=\"inlineStr\"><is><t>");
         if (value instanceof Date) {
-            writer.write(escapeXml(((Date) value).toInstant().toString()));
+            writer.writeEscaped(((Date) value).toInstant().toString());
         } else {
-            writer.write(escapeXml(String.valueOf(value)));
+            writer.writeEscaped(String.valueOf(value));
         }
-        writer.write("</t></is></c>");
+        writer.writeAscii("</t></is></c>");
     }
 
-    private static String[] columnNames(int count) {
-        String[] names = new String[count];
+    private static byte[][] columnNameBytes(int count) {
+        byte[][] prefixes = new byte[count][];
+        byte[] before = "<c r=\"".getBytes(StandardCharsets.US_ASCII);
         for (int i = 0; i < count; i++) {
-            names[i] = columnName(i + 1);
+            byte[] name = columnName(i + 1).getBytes(StandardCharsets.US_ASCII);
+            byte[] combined = new byte[before.length + name.length];
+            System.arraycopy(before, 0, combined, 0, before.length);
+            System.arraycopy(name, 0, combined, before.length, name.length);
+            prefixes[i] = combined;
         }
-        return names;
+        return prefixes;
     }
 
     static String columnName(int index) {
@@ -248,11 +261,154 @@ public final class XlsxWriter {
     }
 
     static String escapeXml(String value) {
-        return value
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;");
+        if (value == null) return "";
+        int length = value.length();
+        boolean needs = false;
+        for (int i = 0; i < length; i++) {
+            char c = value.charAt(i);
+            if (c == '&' || c == '<' || c == '>' || c == '"') { needs = true; break; }
+        }
+        if (!needs) return value;
+        StringBuilder sb = new StringBuilder(length + 16);
+        for (int i = 0; i < length; i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '&': sb.append("&amp;"); break;
+                case '<': sb.append("&lt;"); break;
+                case '>': sb.append("&gt;"); break;
+                case '"': sb.append("&quot;"); break;
+                default: sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Direct byte-oriented XML sink with an ASCII fast path. Avoids the
+     * per-char encoding overhead of {@code OutputStreamWriter} and supports
+     * escaping XML special characters in a single pass.
+     */
+    static final class XmlByteSink {
+        private final OutputStream out;
+        private final byte[] buffer;
+        private int pos;
+
+        XmlByteSink(OutputStream out, int capacity) {
+            this.out = out;
+            this.buffer = new byte[capacity];
+        }
+
+        void writeAscii(String value) throws IOException {
+            int length = value.length();
+            int srcPos = 0;
+            while (srcPos < length) {
+                int free = buffer.length - pos;
+                if (free == 0) {
+                    drain();
+                    free = buffer.length;
+                }
+                int chunk = Math.min(free, length - srcPos);
+                int chunkEnd = srcPos + chunk;
+                for (int i = srcPos; i < chunkEnd; i++) {
+                    buffer[pos++] = (byte) value.charAt(i);
+                }
+                srcPos = chunkEnd;
+            }
+        }
+
+        void writeBytes(byte[] bytes) throws IOException {
+            int len = bytes.length;
+            if (len > buffer.length - pos) {
+                drain();
+                if (len > buffer.length) {
+                    out.write(bytes);
+                    return;
+                }
+            }
+            System.arraycopy(bytes, 0, buffer, pos, len);
+            pos += len;
+        }
+
+        void writeIntAscii(int value) throws IOException {
+            if (value == 0) { writeByte((byte) '0'); return; }
+            if (value == Integer.MIN_VALUE) {
+                writeAscii("-2147483648");
+                return;
+            }
+            byte[] tmp = new byte[11];
+            int t = 0;
+            int v = value;
+            boolean negative = v < 0;
+            if (negative) v = -v;
+            while (v > 0) {
+                tmp[t++] = (byte) ('0' + (v % 10));
+                v /= 10;
+            }
+            if (t + (negative ? 1 : 0) > buffer.length - pos) drain();
+            if (negative) buffer[pos++] = (byte) '-';
+            for (int i = t - 1; i >= 0; i--) buffer[pos++] = tmp[i];
+        }
+
+        void writeEscaped(String value) throws IOException {
+            if (value == null || value.isEmpty()) return;
+            int length = value.length();
+            boolean asciiSafe = true;
+            for (int i = 0; i < length; i++) {
+                char c = value.charAt(i);
+                if (c > 0x7F) { asciiSafe = false; break; }
+            }
+            if (!asciiSafe) {
+                writeBytes(escapeXml(value).getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+            int start = 0;
+            for (int i = 0; i < length; i++) {
+                char c = value.charAt(i);
+                String esc = null;
+                if (c == '&') esc = "&amp;";
+                else if (c == '<') esc = "&lt;";
+                else if (c == '>') esc = "&gt;";
+                else if (c == '"') esc = "&quot;";
+                if (esc == null) continue;
+                if (i > start) writeAsciiRange(value, start, i);
+                writeAscii(esc);
+                start = i + 1;
+            }
+            if (start < length) writeAsciiRange(value, start, length);
+        }
+
+        private void writeAsciiRange(String value, int start, int end) throws IOException {
+            int srcPos = start;
+            while (srcPos < end) {
+                int free = buffer.length - pos;
+                if (free == 0) {
+                    drain();
+                    free = buffer.length;
+                }
+                int chunk = Math.min(free, end - srcPos);
+                int chunkEnd = srcPos + chunk;
+                for (int i = srcPos; i < chunkEnd; i++) {
+                    buffer[pos++] = (byte) value.charAt(i);
+                }
+                srcPos = chunkEnd;
+            }
+        }
+
+        void writeByte(byte b) throws IOException {
+            if (pos == buffer.length) drain();
+            buffer[pos++] = b;
+        }
+
+        void flush() throws IOException {
+            drain();
+        }
+
+        private void drain() throws IOException {
+            if (pos > 0) {
+                out.write(buffer, 0, pos);
+                pos = 0;
+            }
+        }
     }
 
     private static String contentTypesXml(List<Worksheet> sheets) {

@@ -4,6 +4,8 @@ import io.github.beingmartinbmc.pravaah.csv.CsvReader;
 import io.github.beingmartinbmc.pravaah.csv.CsvWriter;
 import io.github.beingmartinbmc.pravaah.diff.DiffEngine;
 import io.github.beingmartinbmc.pravaah.formula.FormulaEngine;
+import io.github.beingmartinbmc.pravaah.internal.io.IOUtils;
+import io.github.beingmartinbmc.pravaah.internal.json.JsonRowWriter;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
 import io.github.beingmartinbmc.pravaah.pipeline.PravaahPipeline;
 import io.github.beingmartinbmc.pravaah.query.QueryEngine;
@@ -118,7 +120,9 @@ public final class Pravaah {
     public static List<Row> parse(String filePath, SchemaDefinition definition, ReadOptions options) throws IOException {
         PravaahFormat format = options.getFormat() != null ? options.getFormat() : PravaahFormat.fromExtension(filePath);
         if (format == PravaahFormat.CSV) {
-            return parseDetailedCsv(new FileInputStream(filePath), definition, options).getRows();
+            try (FileInputStream fis = new FileInputStream(filePath)) {
+                return parseDetailedCsv(fis, definition, options).getRows();
+            }
         }
         List<Row> raw = read(filePath, options).collect();
         ValidationMode mode = options.getValidation() != null ? options.getValidation() : ValidationMode.COLLECT;
@@ -170,7 +174,9 @@ public final class Pravaah {
     public static ProcessResult parseDetailed(String filePath, SchemaDefinition definition, ReadOptions options) throws IOException {
         PravaahFormat format = options.getFormat() != null ? options.getFormat() : PravaahFormat.fromExtension(filePath);
         if (format == PravaahFormat.CSV) {
-            return parseDetailedCsv(new FileInputStream(filePath), definition, options);
+            try (FileInputStream fis = new FileInputStream(filePath)) {
+                return parseDetailedCsv(fis, definition, options);
+            }
         }
         List<Row> raw = read(filePath, options).collect();
         return parseDetailed(raw, definition, options);
@@ -242,16 +248,13 @@ public final class Pravaah {
     // --- JSON helpers ---
 
     private static List<Row> readJsonFile(String path) throws IOException {
-        BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(path), StandardCharsets.UTF_8));
-        try {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(path), StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
-            char[] buf = new char[4096];
+            char[] buf = new char[IOUtils.CHAR_READ_BUFFER_SIZE];
             int read;
             while ((read = reader.read(buf)) != -1) sb.append(buf, 0, read);
             return parseJsonRows(sb.toString());
-        } finally {
-            reader.close();
         }
     }
 
@@ -367,31 +370,6 @@ public final class Pravaah {
     }
 
     private static void writeJsonFile(List<Row> rows, String destination) throws IOException {
-        StringBuilder sb = new StringBuilder("[\n");
-        for (int i = 0; i < rows.size(); i++) {
-            if (i > 0) sb.append(",\n");
-            sb.append("  ");
-            Row row = rows.get(i);
-            sb.append("{");
-            boolean first = true;
-            for (Map.Entry<String, Object> entry : row.entrySet()) {
-                if (!first) sb.append(", ");
-                sb.append("\"").append(entry.getKey().replace("\"", "\\\"")).append("\": ");
-                Object v = entry.getValue();
-                if (v == null) sb.append("null");
-                else if (v instanceof Number) sb.append(v);
-                else if (v instanceof Boolean) sb.append(v);
-                else sb.append("\"").append(String.valueOf(v).replace("\"", "\\\"")).append("\"");
-                first = false;
-            }
-            sb.append("}");
-        }
-        sb.append("\n]\n");
-        FileWriter fw = new FileWriter(destination);
-        try {
-            fw.write(sb.toString());
-        } finally {
-            fw.close();
-        }
+        JsonRowWriter.writeRowsToFile(rows, destination);
     }
 }

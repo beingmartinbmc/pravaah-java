@@ -2,6 +2,7 @@ package io.github.beingmartinbmc.pravaah.pipeline;
 
 import io.github.beingmartinbmc.pravaah.*;
 import io.github.beingmartinbmc.pravaah.csv.CsvWriter;
+import io.github.beingmartinbmc.pravaah.internal.json.JsonRowWriter;
 import io.github.beingmartinbmc.pravaah.perf.PerfUtils;
 import io.github.beingmartinbmc.pravaah.schema.*;
 import io.github.beingmartinbmc.pravaah.xlsx.XlsxWriter;
@@ -16,6 +17,9 @@ import java.util.function.Predicate;
  * Nothing executes until a terminal operation is called: collect(), drain(), process(), or write().
  */
 public class PravaahPipeline {
+
+    /** Sample memory usage every {@value} rows during map/filter execution. */
+    private static final int MEMORY_OBSERVATION_INTERVAL = 4096;
 
     @FunctionalInterface
     public interface RowSupplier {
@@ -173,7 +177,7 @@ public class PravaahPipeline {
                     }
                 }
                 memoryCounter++;
-                if (memoryCounter % 4096 == 0) PerfUtils.observeMemory(stats);
+                if (memoryCounter % MEMORY_OBSERVATION_INTERVAL == 0) PerfUtils.observeMemory(stats);
             }
             rows = nextRows;
         }
@@ -190,35 +194,7 @@ public class PravaahPipeline {
     }
 
     private void writeJson(List<Row> rows, String destination) throws IOException {
-        StringBuilder sb = new StringBuilder("[\n");
-        for (int i = 0; i < rows.size(); i++) {
-            if (i > 0) sb.append(",\n");
-            sb.append("  ").append(rowToJson(rows.get(i)));
-        }
-        sb.append("\n]\n");
-        java.io.FileWriter fw = new java.io.FileWriter(destination);
-        try {
-            fw.write(sb.toString());
-        } finally {
-            fw.close();
-        }
-    }
-
-    private String rowToJson(Row row) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : row.entrySet()) {
-            if (!first) sb.append(", ");
-            sb.append("\"").append(entry.getKey().replace("\"", "\\\"")).append("\": ");
-            Object v = entry.getValue();
-            if (v == null) sb.append("null");
-            else if (v instanceof Number) sb.append(v);
-            else if (v instanceof Boolean) sb.append(v);
-            else sb.append("\"").append(String.valueOf(v).replace("\"", "\\\"")).append("\"");
-            first = false;
-        }
-        sb.append("}");
-        return sb.toString();
+        JsonRowWriter.writeRowsToFile(rows, destination);
     }
 
     private static class ExecuteResult {

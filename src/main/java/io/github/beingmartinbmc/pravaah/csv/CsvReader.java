@@ -6,7 +6,6 @@ import io.github.beingmartinbmc.pravaah.internal.csv.CsvRecordSink;
 import io.github.beingmartinbmc.pravaah.internal.csv.CsvRecordScanner;
 import io.github.beingmartinbmc.pravaah.internal.csv.DefaultRowMaterializer;
 import io.github.beingmartinbmc.pravaah.internal.csv.DirectCsvRecordScanner;
-import io.github.beingmartinbmc.pravaah.internal.csv.RowMaterializer;
 import io.github.beingmartinbmc.pravaah.runtime.RuntimeSupport;
 
 import java.io.*;
@@ -23,7 +22,9 @@ public final class CsvReader {
     private CsvReader() {}
 
     public static List<Row> readAll(String filePath, ReadOptions options) throws IOException {
-        return readAll(new FileInputStream(filePath), options);
+        try (FileInputStream fis = new FileInputStream(filePath)) {
+            return readAll(fis, options);
+        }
     }
 
     public static List<Row> readAll(byte[] data, ReadOptions options) throws IOException {
@@ -81,7 +82,9 @@ public final class CsvReader {
     }
 
     public static int drainCount(String filePath, ReadOptions options) throws IOException {
-        return drainCount(new FileInputStream(filePath), options);
+        try (FileInputStream fis = new FileInputStream(filePath)) {
+            return drainCount(fis, options);
+        }
     }
 
     public static int drainCount(InputStream stream, ReadOptions options) throws IOException {
@@ -132,7 +135,14 @@ public final class CsvReader {
 
         @Override
         public void field(int index, String value) {
-            if (value != null && !value.isEmpty()) {
+            if (empty && value != null && !value.isEmpty()) {
+                empty = false;
+            }
+        }
+
+        @Override
+        public void field(int index, CharSequence text, int start, int end) {
+            if (empty && start != end) {
                 empty = false;
             }
         }
@@ -154,7 +164,7 @@ public final class CsvReader {
         private final RowConsumer consumer;
         private String[] headers;
         private List<String> headerFields;
-        private RowMaterializer materializer;
+        private DefaultRowMaterializer materializer;
         private boolean empty;
         private int rowNumber = 1;
 
@@ -165,6 +175,9 @@ public final class CsvReader {
             this.headerless = headerless;
             this.inferTypes = inferTypes;
             this.consumer = consumer;
+            if (!needAutoHeaders || headers != null) {
+                this.materializer = new DefaultRowMaterializer(headers, headerless, inferTypes);
+            }
         }
 
         @Override
@@ -172,16 +185,14 @@ public final class CsvReader {
             empty = true;
             if (needAutoHeaders && headers == null) {
                 headerFields = new ArrayList<>();
-                materializer = null;
             } else {
-                materializer = new DefaultRowMaterializer(headers, headerless, inferTypes);
                 materializer.startRecord();
             }
         }
 
         @Override
         public void field(int index, String value) {
-            if (value != null && !value.isEmpty()) {
+            if (empty && value != null && !value.isEmpty()) {
                 empty = false;
             }
             if (headerFields != null) {
@@ -192,11 +203,26 @@ public final class CsvReader {
         }
 
         @Override
+        public void field(int index, CharSequence text, int start, int end) {
+            if (empty && start != end) {
+                empty = false;
+            }
+            if (headerFields != null) {
+                headerFields.add(text.subSequence(start, end).toString());
+            } else if (start == end) {
+                materializer.fieldEmpty(index);
+            } else {
+                materializer.field(index, text.subSequence(start, end).toString());
+            }
+        }
+
+        @Override
         public void endRecord() {
             if (empty) return;
             if (headerFields != null) {
                 headers = headerFields.toArray(new String[0]);
                 headerFields = null;
+                materializer = new DefaultRowMaterializer(headers, headerless, inferTypes);
                 return;
             }
 
