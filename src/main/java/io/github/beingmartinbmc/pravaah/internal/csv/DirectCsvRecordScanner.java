@@ -7,12 +7,11 @@ package io.github.beingmartinbmc.pravaah.internal.csv;
  * {@link StringBuilder} when no escapes are present.
  */
 public final class DirectCsvRecordScanner implements CsvRecordScanner {
-    private static final char QUOTE = '"';
     private static final char CR = '\r';
     private static final char LF = '\n';
 
     @Override
-    public void scan(String text, char delimiter, CsvRecordSink sink) {
+    public void scan(String text, char delimiter, char quote, CsvRecordSink sink) {
         final int length = text.length();
         int cursor = 0;
 
@@ -43,23 +42,23 @@ public final class DirectCsvRecordScanner implements CsvRecordScanner {
                     continue;
                 }
 
-                if (first == QUOTE) {
+                if (first == quote) {
                     cursor++;
                     int contentStart = cursor;
                     StringBuilder escaped = null;
 
                     while (cursor < length) {
                         char c = text.charAt(cursor);
-                        if (c != QUOTE) {
+                        if (c != quote) {
                             cursor++;
                             continue;
                         }
 
-                        if (cursor + 1 < length && text.charAt(cursor + 1) == QUOTE) {
+                        if (cursor + 1 < length && text.charAt(cursor + 1) == quote) {
                             if (escaped == null) {
                                 escaped = new StringBuilder(cursor - contentStart + 16);
                             }
-                            escaped.append(text, contentStart, cursor).append(QUOTE);
+                            escaped.append(text, contentStart, cursor).append(quote);
                             cursor += 2;
                             contentStart = cursor;
                             continue;

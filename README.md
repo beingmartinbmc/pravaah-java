@@ -192,7 +192,7 @@ Maven Central: [`io.github.beingmartinbmc:pravaah-java`](https://central.sonatyp
 <dependency>
     <groupId>io.github.beingmartinbmc</groupId>
     <artifactId>pravaah-java</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -259,18 +259,84 @@ int rows = CsvReader.drainCount("large.csv", ReadOptions.defaults());
 
 This uses the direct CSV scanner count sink. `Pravaah.read(...).collect()` materializes rows when you need row objects.
 
+### Stream Large CSV Files
+
+```java
+ProcessStats stats = Pravaah.stream("large.csv",
+    ReadOptions.defaults()
+        .format(PravaahFormat.CSV)
+        .onProgress(count -> System.out.println("rows: " + count)),
+    (row, rowNumber) -> {
+        // write row to your DB, queue, or service
+    });
+```
+
+For CSV, `Pravaah.stream(...)` uses the Reader-backed scanner and does not build a `List<Row>`.
+
+### Map Rows To POJOs
+
+```java
+import io.github.beingmartinbmc.pravaah.mapping.*;
+
+class CustomerUpload {
+    @Required
+    @Column("E-mail")
+    String email;
+
+    @DateFormat("yyyy/MM/dd")
+    LocalDate signup;
+
+    boolean active;
+    double total;
+}
+
+List<CustomerUpload> rows = Pravaah.read("customers.csv", CustomerUpload.class,
+    ReadOptions.defaults().format(PravaahFormat.CSV).inferTypes(true));
+```
+
+### Stream With Schema Validation
+
+```java
+SchemaDefinition schema = new SchemaDefinition()
+    .field("email", Schema.email())
+    .field("age",   Schema.number());
+
+List<PravaahIssue> issues = new ArrayList<>();
+
+ProcessStats stats = Pravaah.stream("large.csv", schema,
+    ReadOptions.defaults()
+        .format(PravaahFormat.CSV)
+        .validation(ValidationMode.COLLECT)
+        .onIssue(issues::add),
+    (row, rowNumber) -> {
+        // only valid rows reach this callback
+    });
+```
+
+### Auto-Detect CSV Dialect
+
+```java
+List<Row> rows = Pravaah.read("european.csv",
+    ReadOptions.defaults()
+        .format(PravaahFormat.CSV)
+        .autoDetectDelimiter(true)   // comma, semicolon, tab, or pipe
+        .autoDetectQuote(true))      // double-quote or single-quote
+    .collect();
+```
+
 ---
 
 ## Core Focus
 
-- CSV parser with quoted fields, escaped quotes, embedded newlines, CRLF, custom delimiters, and direct count scans.
+- CSV parser with quoted fields, escaped quotes, embedded newlines, CRLF, custom delimiters, delimiter/quote/BOM detection, streaming callbacks, and direct count scans.
 - XLS read support through an internal OLE2/BIFF8 parser.
 - XLSX read/write support through ZIP/XML parsing and writer utilities.
 - JSON read/write for fixtures and pipeline output.
-- Schema validation for string, number, boolean, date, email, phone, and any values.
-- Cleaning with trim, whitespace normalization, fuzzy header aliases, and deduplication.
+- Schema validation for string, number, boolean, date, email, phone, regex, one-of, range, and any values.
+- Cleaning with trim, whitespace normalization, fuzzy header aliases, deduplication, and blank-row dropping.
 - Issue reports with row numbers, column names, expected types, and raw values.
 - Lazy pipeline API with map, filter, clean, schema, take, collect, drain, process, and write.
+- Annotation-based POJO mapping with `@Column`, `@Required`, and `@DateFormat`.
 
 ## Advanced Features
 
@@ -313,7 +379,9 @@ This uses the direct CSV scanner count sink. `Pravaah.read(...).collect()` mater
 SchemaDefinition schema = new SchemaDefinition()
     .field("id", Schema.string())
     .field("email", Schema.email())
-    .field("age", Schema.number(true))
+    .field("age", Schema.number(true).range(0, 120))
+    .field("sku", Schema.regex("SKU-\\d{3}"))
+    .field("status", Schema.oneOf("NEW", "DONE"))
     .field("active", Schema.bool().defaultValue(true))
     .field("signupDate", Schema.date());
 ```
@@ -326,7 +394,7 @@ Validation modes:
 | `COLLECT` | Keep valid rows and collect issues |
 | `SKIP` | Drop invalid rows without collecting issues |
 
-Field options include `optional`, `defaultValue`, `coerce`, and custom validators.
+Field options include `optional`, `defaultValue`, `coerce`, `range`, and custom validators.
 
 ---
 
@@ -543,7 +611,12 @@ No benchmark harness or downloaded competitor jars are required in the repositor
 | API | Purpose |
 | --- | --- |
 | `Pravaah.read(source, options)` | Create a pipeline from CSV, XLS, XLSX, JSON, bytes, or rows |
+| `Pravaah.read(source, MyType.class, options)` | Read rows and map them to annotated POJOs |
+| `Pravaah.readAllSheets(source, options)` | Read all sheets into `Map<String, List<Row>>` (CSV/JSON use `"Sheet1"` key) |
+| `Pravaah.stream(source, options, consumer)` | Stream rows through a callback and return stats |
+| `Pravaah.stream(source, schema, options, consumer)` | Stream valid rows and surface validation issues through callbacks |
 | `Pravaah.write(rows, dest, options)` | Write CSV, XLSX, or JSON |
+| `Pravaah.write(rows, outputStream, options)` | Write CSV, XLSX, or JSON to an `OutputStream` |
 | `Pravaah.parse(source, schema, options)` | Validate and return typed rows |
 | `Pravaah.parseDetailed(source, schema, options)` | Return rows, issues, and stats |
 | `CsvReader.drainCount(source, options)` | Count CSV rows without materializing rows |
@@ -563,10 +636,30 @@ No benchmark harness or downloaded competitor jars are required in the repositor
 | `headers` | Use first row as headers, or read headerless rows |
 | `headerNames` | Supply explicit headers |
 | `delimiter` | CSV delimiter, one character |
+| `quote` | CSV quote character, one character |
+| `autoDetectDelimiter` | Detect comma, semicolon, tab, or pipe delimiters |
+| `autoDetectQuote` | Detect double-quote or single-quote CSV quoting |
+| `autoDetectEncoding` | Detect UTF-8 / UTF-16 BOMs before decoding CSV |
+| `charset` | Set the CSV charset explicitly |
 | `inferTypes` | Convert CSV strings to numbers, booleans, and nulls |
 | `formulas` | Preserve formula metadata where supported |
 | `validation` | `FAIL_FAST`, `COLLECT`, or `SKIP` |
-| `cleaning` | Trim, normalize whitespace, fuzzy headers, dedupe |
+| `cleaning` | Trim, normalize whitespace, fuzzy headers, dedupe, drop blank rows |
+| `strictHeaders` | Report missing or unexpected headers when parsing with a schema |
+| `onProgress` | Receive processed row counts during streaming / parsing |
+| `onIssue` | Receive validation issues during streaming / parsing |
+
+### Write Options
+
+| Option | Description |
+| --- | --- |
+| `format` | Force `CSV`, `XLSX`, or `JSON` |
+| `sheetName` | Set the XLSX sheet name |
+| `headers` | Supply explicit output headers |
+| `delimiter` | CSV delimiter |
+| `schema` | Validate rows before writing |
+| `validation` | Write-side validation mode (default `FAIL_FAST`) |
+| `cleaning` | Clean rows before write-side schema validation |
 
 ---
 

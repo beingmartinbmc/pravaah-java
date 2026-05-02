@@ -7,5 +7,7 @@ public enum FieldKind {
     DATE,
     EMAIL,
     PHONE,
+    REGEX,
+    ONE_OF,
     ANY
 }

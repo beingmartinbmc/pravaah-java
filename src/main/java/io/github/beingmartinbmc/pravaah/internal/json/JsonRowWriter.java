@@ -2,8 +2,8 @@ package io.github.beingmartinbmc.pravaah.internal.json;
 
 import io.github.beingmartinbmc.pravaah.Row;
 
-import java.io.FileWriter;
-import java.io.IOException;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -42,6 +42,17 @@ public final class JsonRowWriter {
      * pretty-printed with each row on its own line so it remains diff-friendly.
      */
     public static void writeRowsToFile(List<Row> rows, String destination) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(destination)) {
+            writeRows(rows, fos);
+        }
+    }
+
+    public static void writeRows(List<Row> rows, OutputStream output) throws IOException {
+        output.write(rowsToJson(rows).getBytes(StandardCharsets.UTF_8));
+        output.flush();
+    }
+
+    public static String rowsToJson(List<Row> rows) {
         StringBuilder sb = new StringBuilder(rows.size() * 64 + 16);
         sb.append("[\n");
         for (int i = 0; i < rows.size(); i++) {
@@ -50,9 +61,7 @@ public final class JsonRowWriter {
             appendRow(sb, rows.get(i));
         }
         sb.append("\n]\n");
-        try (FileWriter fw = new FileWriter(destination)) {
-            fw.write(sb.toString());
-        }
+        return sb.toString();
     }
 
     private static void appendValue(StringBuilder out, Object value) {
@@ -66,6 +75,33 @@ public final class JsonRowWriter {
     }
 
     private static String escapeString(String value) {
-        return value.replace("\"", "\\\"");
+        int len = value.length();
+        StringBuilder sb = null;
+        for (int i = 0; i < len; i++) {
+            char c = value.charAt(i);
+            String replacement;
+            switch (c) {
+                case '"':  replacement = "\\\""; break;
+                case '\\': replacement = "\\\\"; break;
+                case '\n': replacement = "\\n";  break;
+                case '\r': replacement = "\\r";  break;
+                case '\t': replacement = "\\t";  break;
+                case '\b': replacement = "\\b";  break;
+                case '\f': replacement = "\\f";  break;
+                default:
+                    if (c < 0x20) {
+                        replacement = String.format("\\u%04x", (int) c);
+                    } else {
+                        if (sb != null) sb.append(c);
+                        continue;
+                    }
+            }
+            if (sb == null) {
+                sb = new StringBuilder(len + 16);
+                sb.append(value, 0, i);
+            }
+            sb.append(replacement);
+        }
+        return sb == null ? value : sb.toString();
     }
 }
