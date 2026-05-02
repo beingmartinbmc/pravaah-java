@@ -31,11 +31,21 @@ jobs:
       - name: Verify build
         run: mvn -B --no-transfer-progress -P central-release -Dgpg.skip=true clean verify
 
+      - name: Prepare runtime artifact
+        shell: bash
+        run: |
+          jar_path="$(find target -maxdepth 1 -type f -name 'pravaah-java-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' -print -quit)"
+          if [[ -z "$jar_path" ]]; then
+            echo "Runtime jar was not produced" >&2
+            exit 1
+          fi
+          cp "$jar_path" target/pravaah-ci-runtime.jar
+
       - name: Upload artifact for runtime checks
         uses: actions/upload-artifact@v4
         with:
           name: pravaah-ci-jar
-          path: target/pravaah-java-*.jar
+          path: target/pravaah-ci-runtime.jar
           if-no-files-found: error
 
   runtime-compatibility:
@@ -99,6 +109,6 @@ jobs:
           }
           JAVA
 
-          jar_path="$(ls release-artifact/pravaah-java-*.jar)"
+          jar_path="release-artifact/pravaah-ci-runtime.jar"
           javac -cp "$jar_path" RuntimeSmoke.java
           java -cp "$jar_path:." RuntimeSmoke
