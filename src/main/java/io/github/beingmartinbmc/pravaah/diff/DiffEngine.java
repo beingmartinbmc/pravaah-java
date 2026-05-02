@@ -1,11 +1,19 @@
 package io.github.beingmartinbmc.pravaah.diff;
 
 import io.github.beingmartinbmc.pravaah.Row;
+import io.github.beingmartinbmc.pravaah.internal.json.JsonRowWriter;
+import io.github.beingmartinbmc.pravaah.internal.text.CsvFormat;
 
 import java.io.*;
 import java.util.*;
 
 public final class DiffEngine {
+
+    /** Maximum number of leading row values combined into a key preview string. */
+    private static final int KEY_PREVIEW_VALUE_LIMIT = 3;
+
+    /** Joins composite key fragments with a NUL byte to avoid ambiguity. */
+    private static final char KEY_FRAGMENT_SEPARATOR = '\0';
 
     private DiffEngine() {}
 
@@ -43,16 +51,15 @@ public final class DiffEngine {
     }
 
     public static void writeDiffReport(DiffResult result, String destination) throws IOException {
-        BufferedWriter writer = new BufferedWriter(new FileWriter(destination));
-        try {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(destination))) {
             writer.write("type,key,changedColumns,before,after");
             writer.newLine();
             for (Row row : result.getAdded()) {
-                writer.write(csvEscape("added") + "," + csvEscape(keyPreview(row)) + ",," + "," + csvEscape(rowToJson(row)));
+                writer.write(escape("added") + "," + escape(keyPreview(row)) + ",," + "," + escape(rowToJson(row)));
                 writer.newLine();
             }
             for (Row row : result.getRemoved()) {
-                writer.write(csvEscape("removed") + "," + csvEscape(keyPreview(row)) + ",," + csvEscape(rowToJson(row)) + ",");
+                writer.write(escape("removed") + "," + escape(keyPreview(row)) + ",," + escape(rowToJson(row)) + ",");
                 writer.newLine();
             }
             for (RowChange change : result.getChanged()) {
@@ -61,13 +68,11 @@ public final class DiffEngine {
                     if (i > 0) cols.append("|");
                     cols.append(change.getChangedColumns().get(i));
                 }
-                writer.write(csvEscape("changed") + "," + csvEscape(change.getKey()) + ","
-                        + csvEscape(cols.toString()) + "," + csvEscape(rowToJson(change.getBefore()))
-                        + "," + csvEscape(rowToJson(change.getAfter())));
+                writer.write(escape("changed") + "," + escape(change.getKey()) + ","
+                        + escape(cols.toString()) + "," + escape(rowToJson(change.getBefore()))
+                        + "," + escape(rowToJson(change.getAfter())));
                 writer.newLine();
             }
-        } finally {
-            writer.close();
         }
     }
 
@@ -76,7 +81,7 @@ public final class DiffEngine {
         for (Row row : rows) {
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < keys.length; i++) {
-                if (i > 0) sb.append('\0');
+                if (i > 0) sb.append(KEY_FRAGMENT_SEPARATOR);
                 Object v = row.get(keys[i]);
                 sb.append(v == null ? "" : String.valueOf(v));
             }
@@ -109,7 +114,7 @@ public final class DiffEngine {
         StringBuilder sb = new StringBuilder();
         int count = 0;
         for (Object val : row.values()) {
-            if (count >= 3) break;
+            if (count >= KEY_PREVIEW_VALUE_LIMIT) break;
             if (count > 0) sb.append("|");
             sb.append(val == null ? "" : String.valueOf(val));
             count++;
@@ -118,27 +123,11 @@ public final class DiffEngine {
     }
 
     private static String rowToJson(Row row) {
-        StringBuilder sb = new StringBuilder("{");
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : row.entrySet()) {
-            if (!first) sb.append(",");
-            sb.append("\"").append(entry.getKey().replace("\"", "\\\"")).append("\":");
-            Object v = entry.getValue();
-            if (v == null) sb.append("null");
-            else if (v instanceof Number) sb.append(v);
-            else if (v instanceof Boolean) sb.append(v);
-            else sb.append("\"").append(String.valueOf(v).replace("\"", "\\\"")).append("\"");
-            first = false;
-        }
-        sb.append("}");
-        return sb.toString();
+        return JsonRowWriter.rowToJson(row);
     }
 
-    private static String csvEscape(String value) {
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
-        }
-        return value;
+    private static String escape(String value) {
+        return CsvFormat.csvEscape(value);
     }
 
     public static class DiffResult {

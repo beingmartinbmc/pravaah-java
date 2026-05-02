@@ -1,6 +1,8 @@
 package io.github.beingmartinbmc.pravaah.schema;
 
 import io.github.beingmartinbmc.pravaah.*;
+import io.github.beingmartinbmc.pravaah.internal.text.CsvFormat;
+import io.github.beingmartinbmc.pravaah.internal.util.Maps;
 
 import java.io.*;
 import java.time.*;
@@ -152,8 +154,7 @@ public final class SchemaValidator {
     }
 
     public static void writeIssueReport(List<PravaahIssue> issues, String destination) throws IOException {
-        BufferedWriter writer = new BufferedWriter(new FileWriter(destination));
-        try {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(destination))) {
             writer.write("severity,code,message,rowNumber,column,expected,rawValue");
             writer.newLine();
             for (PravaahIssue issue : issues) {
@@ -172,8 +173,6 @@ public final class SchemaValidator {
                 writer.write(csvEscape(stringifyIssueValue(issue.getRawValue())));
                 writer.newLine();
             }
-        } finally {
-            writer.close();
         }
     }
 
@@ -280,7 +279,7 @@ public final class SchemaValidator {
     }
 
     private static int mapCapacity(int entries) {
-        return Math.max(4, (int) (entries / 0.75f) + 1);
+        return Maps.mapCapacity(entries);
     }
 
     private static String buildIdentity(Row row, List<String> keys) {
@@ -302,9 +301,6 @@ public final class SchemaValidator {
     }
 
     static String csvEscape(String value) {
-        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
-            return "\"" + value.replace("\"", "\"\"") + "\"";
-        }
-        return value;
+        return CsvFormat.csvEscape(value);
     }
 }
