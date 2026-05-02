@@ -144,7 +144,7 @@ Want to skip rejected rows entirely instead of collecting them? Swap one enum: `
 **Other things you get for free:**
 
 - No Apache POI dependency, even for legacy `.xls`.
-- Lazy `PravaahPipeline` so `map / filter / clean / schema / take / write` fuses into one pass.
+- Lazy `PravaahPipeline`: `map / filter / clean / schema / take / write` are deferred until you call a terminal operation (`collect`, `drain`, `process`, or `write`).
 - Java 8 compatible with Java 11 / 17 overlays loaded automatically from the same MR-JAR.
 - Works in legacy enterprise environments — no dependency hell, no transitive surprises.
 
@@ -160,8 +160,8 @@ Want to skip rejected rows entirely instead of collecting them? Swap one enum: `
 └──────────────┘    └─────────┘    └──────────┘    └───────────┘    └──────────┘
                           │               │                │
                           ▼               ▼                ▼
-                    fuzzy match     type-safe rows    fused stages
-                    trim/dedupe     issue report      one pass
+                    fuzzy match     type-safe rows    deferred stages
+                    trim/dedupe     issue report      run on terminal op
 ```
 
 A rejected upload looks like this on disk (`SchemaValidator.writeIssueReport(issues, "rejected.csv")`):
@@ -345,10 +345,12 @@ XLSX writing supports multiple sheets, formulas, frozen panes, column metadata, 
 ## Query, Diff, Join
 
 ```java
+import io.github.beingmartinbmc.pravaah.diff.DiffEngine;
+
 List<Row> top = Pravaah.query(rows,
     "SELECT id, name, revenue WHERE revenue >= 100000 ORDER BY revenue DESC LIMIT 25");
 
-DiffResult changes = Pravaah.diff(beforeRows, afterRows, "customerId");
+DiffEngine.DiffResult changes = Pravaah.diff(beforeRows, afterRows, "customerId");
 
 List<Row> enriched = Pravaah.joinRows(orders, customers, "customerId");
 ```
@@ -522,7 +524,7 @@ No benchmark harness or downloaded competitor jars are required in the repositor
 
 **XLS:** The reader opens the OLE2 compound file, extracts the `Workbook` stream, and parses BIFF8 records directly. It handles shared strings, sheet metadata, numeric cells, RK cells, booleans, blanks, labels, and cached formula values.
 
-**XLSX read:** Targets workbook metadata and selected worksheet XML instead of building a full workbook object model. Worksheet XML is scanned in place by character index, so cell values become `Row` entries without intermediate `Object[]` arrays. XML entity decoding runs as a single-pass `StringBuilder` walk; the regex fallbacks were retired.
+**XLSX read:** Targets workbook metadata and selected worksheet XML instead of building a full workbook object model. Worksheet XML is scanned in place by character index, so cell values become `Row` entries without intermediate `Object[]` arrays. XML entity decoding runs as a single-pass `StringBuilder` walk over the cell text.
 
 **XLSX write:** Cell column-name prefixes are pre-encoded as ASCII byte arrays once per sheet. Row XML is emitted through a 64 KiB byte sink with an ASCII fast path; XML escaping happens in a single pass without intermediate strings.
 
