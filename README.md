@@ -1,5 +1,11 @@
 # Pravaah: Schema-first file ingestion for Java
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.beingmartinbmc/pravaah-java.svg?label=Maven%20Central&color=blue)](https://central.sonatype.com/artifact/io.github.beingmartinbmc/pravaah-java)
+[![javadoc](https://javadoc.io/badge2/io.github.beingmartinbmc/pravaah-java/javadoc.svg)](https://javadoc.io/doc/io.github.beingmartinbmc/pravaah-java)
+[![ci](https://github.com/beingmartinbmc/pravaah-java/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/beingmartinbmc/pravaah-java/actions/workflows/ci.yml)
+[![Java 8+](https://img.shields.io/badge/Java-8%2B-007396.svg?logo=openjdk&logoColor=white)](https://adoptium.net/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 > **Parsing is not ingestion.**
 >
 > Stop writing hundreds of lines of fragile CSV / XLSX parsing + validation code. Pravaah turns messy uploads into clean, validated data with structured rejected rows — in a few lines.
