@@ -1,19 +1,31 @@
 # Pravaah Java
 
-Stop writing CSV and Excel import code.
+**Stop writing 300 lines of fragile CSV / Excel parsing + validation code.**
 
-Pravaah is a streaming, schema-first ingestion engine for Java that turns messy CSV, XLS, XLSX, and JSON into validated, typed rows with rejection reports.
+Pravaah is the **upload → clean → validate → reject → output** pipeline for Java. Point it at a messy CSV, XLS, XLSX, or JSON file — get back typed rows, a rejection report, and zero hand-written glue.
 
-Replace hundreds of lines of parsing, validation, and cleanup logic with a single pipeline.
+```text
+File ──▶ Clean headers ──▶ Validate schema ──▶ Coerce types ──▶ Output
+                                  │
+                                  ▼
+                          Rejected rows + issues
+```
+
+Other libraries solve _one_ slice of this:
+
+| Tool                | What it does            | What it doesn't                                |
+| ------------------- | ----------------------- | ---------------------------------------------- |
+| Apache POI          | Reads / writes Excel    | No schema, no validation, no rejection report  |
+| Apache Commons CSV  | Parses CSV records      | No schema, no header cleanup, no Excel         |
+| OpenCSV / uniVocity | Parse / bind CSV        | No XLS / XLSX, no rejection-report pipeline    |
+| Jackson CSV         | CSV ↔ POJOs             | No XLS / XLSX, no rejection-report pipeline    |
+| **Pravaah**         | **Full ingestion pipeline (CSV + XLS + XLSX + JSON, schema, cleanup, issues)** | — |
+
+- Zero runtime dependencies. Java 8+. Reads legacy `.xls` without Apache POI.
+- Schema-first: think Pydantic / Zod / Yup, but for Java file uploads.
+- Faster than Apache POI / EasyExcel / Commons CSV / OpenCSV / Jackson CSV on the benchmarks below.
 
 Looking for the Node.js version? See [`beingmartinbmc/pravaah`](https://github.com/beingmartinbmc/pravaah).
-
-- Zero runtime dependencies
-- Works on Java 8+
-- Reads legacy `.xls` without Apache POI
-- Faster than Apache POI on the included spreadsheet benchmarks
-
-**Like Jackson for messy spreadsheets. ETL without Spark.**
 
 ```text
 CSV direct count: 7,046,063 rows, 145MB
@@ -29,118 +41,78 @@ Benchmarked locally on the repository benchmark files using JDK 8, 11, and 17 on
 
 ## 30-Second Win
 
-### Before: Typical Java Import Mess
+### Input: a real customer upload
 
-```java
-BufferedReader br = new BufferedReader(new FileReader("upload.csv"));
-String[] headers = br.readLine().split(",");
-List<Row> rows = new ArrayList<>();
-List<PravaahIssue> issues = new ArrayList<>();
-
-String line;
-int rowNumber = 1;
-while ((line = br.readLine()) != null) {
-    String[] cells = line.split(","); // breaks on quoted commas
-    String email = find(cells, headers, "E-mail Address", "email", "mail").trim();
-    if (!email.contains("@")) {
-        issues.add(PravaahIssue.error("invalid_email", "Bad email", rowNumber, "email", email, "email"));
-        continue;
-    }
-    // parse numbers, normalize booleans, handle defaults, write rejection report...
-    rowNumber++;
-}
+```text
+"E-mail Address",   " Total ", Active
+ada@lovelace.io  ,  1250.00  , yes
+not-an-email     ,    50.00  , true
+grace@hopper.dev ,   -50.00  , 1
+hedy@lamarr.com  ,   980     , no
 ```
 
-### After: Pravaah
+Inconsistent header (`E-mail Address` vs your domain's `email`), padded values, mixed booleans (`yes` / `true` / `1` / `no`), one bad email, one negative total.
+
+### After: Pravaah, in one call
 
 ```java
 import io.github.beingmartinbmc.pravaah.*;
 import io.github.beingmartinbmc.pravaah.schema.*;
 
+SchemaDefinition schema = new SchemaDefinition()
+    .field("email",  Schema.email())
+    .field("total",  Schema.number())
+    .field("active", Schema.bool().defaultValue(false));
+
+CleaningOptions cleaning = CleaningOptions.defaults()
+    .trim(true)
+    .fuzzyHeader("email", "E-mail Address", "Email Address", "mail");
+
 ProcessResult result = Pravaah.parseDetailed(
     "upload.csv",
-    new SchemaDefinition()
-        .field("email", Schema.email())
-        .field("total", Schema.number())
-        .field("active", Schema.bool().defaultValue(false)),
+    schema,
     ReadOptions.defaults()
         .format(PravaahFormat.CSV)
         .validation(ValidationMode.COLLECT)
-        .cleaning(CleaningOptions.defaults()
-            .trim(true)
-            .fuzzyHeader("email", "E-mail", "Email Address", "mail"))
-);
+        .cleaning(cleaning));
 
-System.out.println(result.getRows().size() + " valid rows");
-System.out.println(result.getIssues().size() + " rejected fields");
+result.getRows();    // 3 typed, validated rows ready to insert
+result.getIssues();  // 1 row-numbered rejection: row 2, email, "not-an-email"
 ```
 
-Typed output. Fuzzy headers. Coercion. Row-numbered issues. No `String.split`, no hand-written email regex loop, no pile of one-off import code.
+You get typed rows, fuzzy header matching, value coercion, and a row-numbered rejection report. No `String.split`, no hand-rolled regex, no `try { Double.parseDouble(...) } catch (...)` loops, no parallel rejection list.
+
+Want the rejection report on disk?
+
+```java
+SchemaValidator.writeIssueReport(result.getIssues(), "rejected.csv");
+```
+
+Want to skip rejected rows entirely instead of collecting them? Swap one enum: `ValidationMode.SKIP`. Want to fail the upload on the first bad row? `ValidationMode.FAIL_FAST`.
 
 ---
 
 ## Why Pravaah Is Different
 
-- No Apache POI dependency, even for `.xls`.
-- One pipeline for CSV, XLS, XLSX, and JSON.
-- Validation and rejection reporting are built in, not bolted on after parsing.
-- CSV has a direct count path for huge files.
-- Java 8 compatible, with Java 11/17 runtime overlays in the same JAR.
+Most Java libraries solve _one_ stage of a file upload. Pravaah owns the whole pipeline so you don't glue five things together.
 
-### Why Not Just Use Existing Libraries?
+| Stage              | Without Pravaah                                       | With Pravaah                                |
+| ------------------ | ----------------------------------------------------- | ------------------------------------------- |
+| **Detect format**  | Sniff extension, branch on parser                     | `Pravaah.read(path)` auto-detects           |
+| **Parse**          | Different API per format (POI vs Commons CSV vs ...)  | One `Row` model across CSV / XLS / XLSX / JSON |
+| **Clean headers**  | Hand-maintained alias `Map<String,String>`            | `cleaning.fuzzyHeader("email", "E-mail", ...)` |
+| **Trim / dedupe**  | Bespoke loops                                         | `cleaning.trim(true).dedupeKey("id")`       |
+| **Validate types** | `try { parse } catch { add to issues }` per column    | `Schema.email() / number() / bool() / date()` |
+| **Reject bad rows**| Parallel `List<Issue>` you maintain by hand           | `result.getIssues()` with row #, column, expected, raw value |
+| **Report**         | Roll your own CSV writer for the rejection report     | `SchemaValidator.writeIssueReport(...)`     |
+| **Stream big files** | Custom counters, hand-tuned buffers                 | `CsvReader.drainCount(...)` count-only sink |
 
-| Problem | Typical Approach | Pravaah |
-| --- | --- | --- |
-| CSV parsing | Commons CSV, OpenCSV, uniVocity | Built in |
-| Excel reading | Apache POI | Built in, no runtime dependency |
-| Schema validation | Custom code | Declarative schema |
-| Header cleanup | Manual aliases | Fuzzy headers |
-| Error reporting | Hand-written rejection list | Row-numbered issues |
-| Multiple formats | Separate APIs | One pipeline |
+**Other things you get for free:**
 
----
-
-## The Problem
-
-You receive a spreadsheet from a customer. It might be CSV, old Excel `.xls`, modern `.xlsx`, or JSON. Headers are inconsistent, emails are invalid, numbers arrive as strings, and operations needs a rejection report.
-
-Typical Java import code quickly becomes:
-
-- file format detection
-- parser-specific row APIs
-- header mapping
-- trimming and whitespace normalization
-- validation
-- type coercion
-- duplicate handling
-- error reporting
-
-Pravaah keeps that workflow in one library.
-
----
-
-## Example: Customer Upload
-
-Input columns:
-
-- `"E-mail Address"`
-- `" Total "`
-- invalid email rows
-- negative or malformed totals
-
-Pravaah output:
-
-- normalized `email` header
-- trimmed values
-- typed `double` totals
-- valid rows for import
-- rejection report with row number, column, expected type, and raw value
-
-```text
-severity,code,message,rowNumber,column,expected,rawValue
-error,invalid_type,email must be email,14,email,email,not-an-email
-error,invalid_value,total cannot be negative,203,total,number,-50.00
-```
+- No Apache POI dependency, even for legacy `.xls`.
+- Lazy `PravaahPipeline` so `map / filter / clean / schema / take / write` fuses into one pass.
+- Java 8 compatible with Java 11 / 17 overlays loaded automatically from the same MR-JAR.
+- Works in legacy enterprise environments — no dependency hell, no transitive surprises.
 
 ---
 
@@ -158,7 +130,15 @@ error,invalid_value,total cannot be negative,203,total,number,-50.00
                     trim/dedupe     issue report      one pass
 ```
 
-CSV uses a direct scanner that can emit to a count-only sink, row materializer, or validation sink. XLSX uses selective ZIP/XML parsing. XLS uses an internal OLE2 + BIFF8 reader, so legacy Excel reads do not require Apache POI.
+A rejected upload looks like this on disk (`SchemaValidator.writeIssueReport(issues, "rejected.csv")`):
+
+```text
+severity,code,message,rowNumber,column,expected,rawValue
+error,invalid_type,email must be email,14,email,email,not-an-email
+error,invalid_value,total cannot be negative,203,total,number,-50.00
+```
+
+Under the hood: CSV uses a direct scanner that can emit to a count-only sink, a row materializer, or a validation sink. XLSX uses selective ZIP / XML parsing. XLS uses an internal OLE2 + BIFF8 reader, so legacy Excel reads do not require Apache POI.
 
 ---
 
@@ -178,22 +158,18 @@ Maven Central: [`io.github.beingmartinbmc:pravaah-java`](https://central.sonatyp
 
 ---
 
-## Who This Is For
+## Use Pravaah If…
 
-- Backend teams building import flows for customer spreadsheets.
-- SaaS products that need validation before data enters the database.
-- Batch jobs and ETL steps where bad rows need explainable rejection reports.
-- Java projects that want CSV/XLS/XLSX ingestion without a runtime dependency stack.
+- You expose a "**Upload your CSV / Excel**" feature and you're tired of re-implementing the same parse → validate → reject loop on every project.
+- You build SaaS / internal tools that ingest customer or vendor spreadsheets and need explainable rejection reports.
+- You run batch jobs / ETL steps that must keep good rows and surface the bad ones.
+- You want CSV / XLS / XLSX ingestion that drops into a Java 8 enterprise stack with **zero runtime dependencies**.
 
-If you need workbook editing, charts, macros, styling fidelity, pivot tables, or advanced Excel authoring, use Apache POI. Pravaah treats spreadsheets as data.
+## Don't Use Pravaah If…
 
----
-
-## When Not To Use Pravaah
-
-- You need Excel styling, charts, macros, pivot tables, or arbitrary workbook editing. Use Apache POI.
-- You need distributed processing across a cluster. Use Apache Spark or Flink.
-- You only need to read one tiny CSV with no validation. Plain Java may be enough.
+- You need Excel styling, charts, macros, pivot tables, or workbook editing fidelity → use **Apache POI**.
+- You need to ingest terabytes across a cluster → use **Spark** or **Flink**.
+- You read one tiny CSV with no validation, ever → plain Java is fine.
 
 ---
 
