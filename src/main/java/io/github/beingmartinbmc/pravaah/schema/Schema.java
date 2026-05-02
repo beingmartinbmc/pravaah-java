@@ -1,5 +1,8 @@
 package io.github.beingmartinbmc.pravaah.schema;
 
+import java.util.Collection;
+import java.util.regex.Pattern;
+
 /**
  * Factory methods for building field definitions, mirroring the TypeScript {@code schema.*} builders.
  */
@@ -53,6 +56,26 @@ public final class Schema {
 
     public static FieldDefinition phone(boolean optional) {
         return phone().optional(optional);
+    }
+
+    public static FieldDefinition regex(String pattern) {
+        return new FieldDefinition(FieldKind.REGEX).coerce(true).regex(pattern);
+    }
+
+    public static FieldDefinition regex(Pattern pattern) {
+        return new FieldDefinition(FieldKind.REGEX).coerce(true).regex(pattern);
+    }
+
+    public static FieldDefinition oneOf(Object... values) {
+        return new FieldDefinition(FieldKind.ONE_OF).coerce(true).oneOf(values);
+    }
+
+    public static FieldDefinition oneOf(Collection<?> values) {
+        return new FieldDefinition(FieldKind.ONE_OF).coerce(true).oneOf(values);
+    }
+
+    public static FieldDefinition range(double min, double max) {
+        return number().range(min, max);
     }
 
     public static FieldDefinition any() {

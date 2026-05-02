@@ -70,7 +70,10 @@ public final class SchemaValidator {
         List<Row> output = new ArrayList<>();
         for (Row row : rows) {
             Row cleaned = cleanRow(row, options);
-            if (options.getDedupeKey() == null) {
+            if (options != null && options.isDropBlankRows() && isBlankRow(cleaned)) {
+                continue;
+            }
+            if (options == null || options.getDedupeKey() == null) {
                 output.add(cleaned);
                 continue;
             }
@@ -80,6 +83,67 @@ public final class SchemaValidator {
             }
         }
         return output;
+    }
+
+    public static boolean isBlankRow(Row row) {
+        if (row == null || row.isEmpty()) return true;
+        for (Object value : row.values()) {
+            if (value == null) continue;
+            if (value instanceof String && ((String) value).trim().isEmpty()) continue;
+            return false;
+        }
+        return true;
+    }
+
+    public static List<PravaahIssue> validateHeaders(Collection<String> headers, SchemaDefinition definition,
+                                                     CleaningOptions cleaning) {
+        List<PravaahIssue> issues = new ArrayList<>();
+        if (headers == null || definition == null) return issues;
+
+        Set<String> recognized = new HashSet<>();
+        Map<String, String> aliasToCanonical = new HashMap<>();
+        for (String key : definition.keySet()) {
+            String normalized = normalizeHeader(key);
+            recognized.add(normalized);
+            aliasToCanonical.put(normalized, key);
+        }
+
+        Map<String, List<String>> fuzzy = cleaning == null ? null : cleaning.getFuzzyHeaders();
+        if (fuzzy != null) {
+            for (Map.Entry<String, List<String>> entry : fuzzy.entrySet()) {
+                String canonical = entry.getKey();
+                String canonicalNorm = normalizeHeader(canonical);
+                recognized.add(canonicalNorm);
+                aliasToCanonical.put(canonicalNorm, canonical);
+                for (String alias : entry.getValue()) {
+                    String normalizedAlias = normalizeHeader(alias);
+                    recognized.add(normalizedAlias);
+                    aliasToCanonical.put(normalizedAlias, canonical);
+                }
+            }
+        }
+
+        Set<String> presentCanonical = new HashSet<>();
+        for (String header : headers) {
+            String normalized = normalizeHeader(header == null ? "" : header);
+            String canonical = aliasToCanonical.get(normalized);
+            if (canonical != null) {
+                presentCanonical.add(canonical);
+            }
+            if (!recognized.contains(normalized)) {
+                issues.add(PravaahIssue.error("unexpected_header", "unexpected header: " + header,
+                        0, header, header, "known schema header"));
+            }
+        }
+
+        for (Map.Entry<String, FieldDefinition> entry : definition.entrySet()) {
+            FieldDefinition field = entry.getValue();
+            if (!field.isOptional() && !field.hasDefaultValue() && !presentCanonical.contains(entry.getKey())) {
+                issues.add(PravaahIssue.error("missing_header", "missing header: " + entry.getKey(),
+                        0, entry.getKey(), null, "required schema header"));
+            }
+        }
+        return issues;
     }
 
     public static ValidationResult validateRow(Row row, SchemaDefinition definition, int rowNumber) {
@@ -106,7 +170,14 @@ public final class SchemaValidator {
             CoerceResult coerced = coerceValue(raw, field);
             if (!coerced.isOk()) {
                 issues = addIssue(issues, PravaahIssue.error("invalid_type", key + " must be " + field.getKind().name().toLowerCase(),
-                        rowNumber, key, raw, field.getKind().name().toLowerCase()));
+                        rowNumber, key, raw, expected(field)));
+                continue;
+            }
+
+            String constraintIssue = validateConstraints(coerced.getValue(), field);
+            if (constraintIssue != null) {
+                issues = addIssue(issues, PravaahIssue.error("invalid_value", constraintIssue,
+                        rowNumber, key, raw, expected(field)));
                 continue;
             }
 
@@ -114,7 +185,7 @@ public final class SchemaValidator {
                 String customIssue = field.getValidate().apply(coerced.getValue(), row);
                 if (customIssue != null) {
                     issues = addIssue(issues, PravaahIssue.error("invalid_value", customIssue,
-                            rowNumber, key, raw, field.getKind().name().toLowerCase()));
+                            rowNumber, key, raw, expected(field)));
                     continue;
                 }
             }
@@ -134,6 +205,10 @@ public final class SchemaValidator {
 
         for (Row row : rows) {
             Row cleaned = cleanRow(row, cleaning);
+            if (cleaning != null && cleaning.isDropBlankRows() && isBlankRow(cleaned)) {
+                rowNumber++;
+                continue;
+            }
             ValidationResult result = validateRow(cleaned, definition, rowNumber);
             if (result.getValue() != null) {
                 output.add(result.getValue());
@@ -219,6 +294,27 @@ public final class SchemaValidator {
                 String phone = NON_DIGIT.matcher(String.valueOf(raw)).replaceAll("");
                 return phone.length() >= 7 ? CoerceResult.success(phone) : CoerceResult.failure();
             }
+            case REGEX: {
+                String value = String.valueOf(raw);
+                Pattern regex = field.getRegex();
+                return regex != null && regex.matcher(value).matches()
+                        ? CoerceResult.success(value)
+                        : CoerceResult.failure();
+            }
+            case ONE_OF: {
+                Set<Object> allowed = field.getAllowedValues();
+                if (allowed == null || allowed.isEmpty()) return CoerceResult.failure();
+                if (allowed.contains(raw)) return CoerceResult.success(raw);
+                if (field.isCoerce()) {
+                    String rawText = String.valueOf(raw);
+                    for (Object allowedValue : allowed) {
+                        if (Objects.equals(rawText, String.valueOf(allowedValue))) {
+                            return CoerceResult.success(allowedValue);
+                        }
+                    }
+                }
+                return CoerceResult.failure();
+            }
             case NUMBER: {
                 if (raw instanceof Number) return CoerceResult.success(((Number) raw).doubleValue());
                 if (!field.isCoerce()) return CoerceResult.failure();
@@ -276,6 +372,38 @@ public final class SchemaValidator {
         }
         issues.add(issue);
         return issues;
+    }
+
+    private static String validateConstraints(Object value, FieldDefinition field) {
+        if ((field.getMin() != null || field.getMax() != null) && value instanceof Number) {
+            double n = ((Number) value).doubleValue();
+            if (field.getMin() != null && n < field.getMin()) {
+                return "value must be >= " + field.getMin();
+            }
+            if (field.getMax() != null && n > field.getMax()) {
+                return "value must be <= " + field.getMax();
+            }
+        }
+        return null;
+    }
+
+    private static String expected(FieldDefinition field) {
+        if (field.getKind() == FieldKind.REGEX && field.getRegexSource() != null) {
+            return "regex:" + field.getRegexSource();
+        }
+        if (field.getKind() == FieldKind.ONE_OF && field.getAllowedValues() != null) {
+            return "one_of:" + field.getAllowedValues();
+        }
+        if (field.getMin() != null || field.getMax() != null) {
+            StringBuilder sb = new StringBuilder(field.getKind().name().toLowerCase());
+            sb.append(" range[");
+            sb.append(field.getMin() == null ? "" : field.getMin());
+            sb.append(",");
+            sb.append(field.getMax() == null ? "" : field.getMax());
+            sb.append("]");
+            return sb.toString();
+        }
+        return field.getKind().name().toLowerCase();
     }
 
     private static int mapCapacity(int entries) {

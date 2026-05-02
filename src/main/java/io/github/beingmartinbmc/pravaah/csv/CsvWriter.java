@@ -27,80 +27,82 @@ public final class CsvWriter {
     private CsvWriter() {}
 
     public static void write(List<Row> rows, String destination, WriteOptions options) throws IOException {
+        try (FileOutputStream fos = new FileOutputStream(destination)) {
+            write(rows, fos, options);
+        }
+    }
+
+    public static void write(List<Row> rows, OutputStream output, WriteOptions options) throws IOException {
         String delimiter = options.getDelimiter() != null ? options.getDelimiter() : DEFAULT_DELIMITER;
         if (delimiter.length() != 1 || delimiter.charAt(0) > MAX_ASCII) {
-            writeFallback(rows, destination, options, delimiter);
+            writeFallback(rows, output, options, delimiter);
             return;
         }
         byte delimByte = (byte) delimiter.charAt(0);
         List<String> headers = resolveHeaders(options.getHeaders(), rows);
 
-        try (FileOutputStream fos = new FileOutputStream(destination)) {
-            ByteSink sink = new ByteSink(fos, BUFFER_SIZE);
-            int headerCount = headers == null ? 0 : headers.size();
+        ByteSink sink = new ByteSink(output, BUFFER_SIZE);
+        int headerCount = headers == null ? 0 : headers.size();
+        if (headers != null) {
+            for (int i = 0; i < headerCount; i++) {
+                if (i > 0) sink.writeByte(delimByte);
+                writeFieldFast(sink, headers.get(i), delimByte);
+            }
+            sink.writeByte(LF);
+        }
+
+        for (Row row : rows) {
             if (headers != null) {
                 for (int i = 0; i < headerCount; i++) {
                     if (i > 0) sink.writeByte(delimByte);
-                    writeFieldFast(sink, headers.get(i), delimByte);
+                    Object val = row.get(headers.get(i));
+                    if (val == null) continue;
+                    writeFieldFast(sink, valueToString(val), delimByte);
                 }
-                sink.writeByte(LF);
-            }
-
-            for (Row row : rows) {
-                if (headers != null) {
-                    for (int i = 0; i < headerCount; i++) {
-                        if (i > 0) sink.writeByte(delimByte);
-                        Object val = row.get(headers.get(i));
-                        if (val == null) continue;
-                        writeFieldFast(sink, valueToString(val), delimByte);
-                    }
-                } else {
-                    boolean first = true;
-                    for (Object val : row.values()) {
-                        if (!first) sink.writeByte(delimByte);
-                        if (val != null) writeFieldFast(sink, valueToString(val), delimByte);
-                        first = false;
-                    }
+            } else {
+                boolean first = true;
+                for (Object val : row.values()) {
+                    if (!first) sink.writeByte(delimByte);
+                    if (val != null) writeFieldFast(sink, valueToString(val), delimByte);
+                    first = false;
                 }
-                sink.writeByte(LF);
             }
-            sink.flush();
+            sink.writeByte(LF);
         }
+        sink.flush();
     }
 
-    private static void writeFallback(List<Row> rows, String destination,
+    private static void writeFallback(List<Row> rows, OutputStream output,
                                       WriteOptions options, String delimiter) throws IOException {
         List<String> headers = resolveHeaders(options.getHeaders(), rows);
         byte[] delimBytes = delimiter.getBytes(StandardCharsets.UTF_8);
 
-        try (FileOutputStream fos = new FileOutputStream(destination)) {
-            ByteSink sink = new ByteSink(fos, BUFFER_SIZE);
+        ByteSink sink = new ByteSink(output, BUFFER_SIZE);
+        if (headers != null) {
+            for (int i = 0; i < headers.size(); i++) {
+                if (i > 0) sink.write(delimBytes);
+                writeFieldUtf8(sink, headers.get(i), delimiter);
+            }
+            sink.writeByte(LF);
+        }
+        for (Row row : rows) {
             if (headers != null) {
                 for (int i = 0; i < headers.size(); i++) {
                     if (i > 0) sink.write(delimBytes);
-                    writeFieldUtf8(sink, headers.get(i), delimiter);
+                    Object val = row.get(headers.get(i));
+                    if (val != null) writeFieldUtf8(sink, valueToString(val), delimiter);
                 }
-                sink.writeByte(LF);
-            }
-            for (Row row : rows) {
-                if (headers != null) {
-                    for (int i = 0; i < headers.size(); i++) {
-                        if (i > 0) sink.write(delimBytes);
-                        Object val = row.get(headers.get(i));
-                        if (val != null) writeFieldUtf8(sink, valueToString(val), delimiter);
-                    }
-                } else {
-                    boolean first = true;
-                    for (Object val : row.values()) {
-                        if (!first) sink.write(delimBytes);
-                        if (val != null) writeFieldUtf8(sink, valueToString(val), delimiter);
-                        first = false;
-                    }
+            } else {
+                boolean first = true;
+                for (Object val : row.values()) {
+                    if (!first) sink.write(delimBytes);
+                    if (val != null) writeFieldUtf8(sink, valueToString(val), delimiter);
+                    first = false;
                 }
-                sink.writeByte(LF);
             }
-            sink.flush();
+            sink.writeByte(LF);
         }
+        sink.flush();
     }
 
     private static List<String> resolveHeaders(List<String> requested, List<Row> rows) {
