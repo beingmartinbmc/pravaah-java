@@ -172,7 +172,7 @@ Maven Central: [`io.github.beingmartinbmc:pravaah-java`](https://central.sonatyp
 <dependency>
     <groupId>io.github.beingmartinbmc</groupId>
     <artifactId>pravaah-java</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
